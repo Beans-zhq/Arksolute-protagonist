@@ -14,7 +14,7 @@ body {
 }
 
 body {
-  -webkit-app-region: drag;
+  -webkit-app-region: no-drag;
 }
 
 .pet-shell {
@@ -26,27 +26,32 @@ body {
 
 .drag-region {
   position: absolute;
-  inset: 48px 0 0;
+  inset: 74px 0 0;
   display: grid;
   place-items: end center;
-  -webkit-app-region: drag;
+  cursor: grab;
+  touch-action: none;
+  -webkit-app-region: no-drag;
 }
 
 .pet-video {
-  width: min(92vw, 258px);
-  height: min(82vh, 292px);
+  width: min(92vw, 292px);
+  height: min(80vh, 306px);
   object-fit: contain;
   filter: drop-shadow(0 14px 16px rgb(0 0 0 / 0.3));
   pointer-events: auto;
+  transform: scaleX(var(--pet-facing, 1));
+  transform-origin: center bottom;
   -webkit-app-region: no-drag;
 }
 
 .bubble {
   position: absolute;
-  top: 8px;
+  top: 16px;
   left: 50%;
   z-index: 2;
-  max-width: 248px;
+  width: max-content;
+  max-width: min(268px, calc(100vw - 44px));
   min-height: 42px;
   padding: 10px 13px;
   border: 1px solid rgb(255 255 255 / 0.68);
@@ -82,10 +87,22 @@ body {
   transform: translate(-50%, 0);
 }
 
+html[data-direction="left"] {
+  --pet-facing: -1;
+}
+
+html[data-direction="right"] {
+  --pet-facing: 1;
+}
+
+html.is-dragging .drag-region {
+  cursor: grabbing;
+}
+
 .menu-button,
 .min-button {
   position: absolute;
-  top: 8px;
+  top: 10px;
   z-index: 3;
   width: 28px;
   height: 28px;
@@ -101,11 +118,11 @@ body {
 }
 
 .menu-button {
-  right: 10px;
+  right: 12px;
 }
 
 .min-button {
-  right: 44px;
+  right: 48px;
 }
 
 .pet-shell:hover .menu-button,
