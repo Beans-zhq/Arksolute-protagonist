@@ -113,9 +113,16 @@ let dragStartBounds = null;
 let lastDirection = 1;
 let clickTimer = null;
 let suppressNextClick = false;
+let measuredVideoBounds = null;
+let measureTimer = null;
+let measureSamplesLeft = 0;
 
 const clickThreshold = 5;
 const dragSampleMs = 16;
+const alphaThreshold = 8;
+const scanWidth = 180;
+const measureSampleCount = 8;
+const measureSampleInterval = 180;
 
 function setAction(action, options = {}) {
   if (!assets[action]) return;
@@ -123,6 +130,8 @@ function setAction(action, options = {}) {
   currentAction = action;
   video.src = assets[action];
   video.loop = !temporaryActions.has(action);
+  measuredVideoBounds = null;
+  measureSamplesLeft = measureSampleCount;
   video.play().catch(() => {});
 
   window.clearTimeout(temporaryTimer);
@@ -139,6 +148,7 @@ function setDirection(direction) {
 
   lastDirection = nextDirection;
   document.documentElement.dataset.direction = nextDirection < 0 ? 'left' : 'right';
+  updateContentBounds();
 }
 
 function say(text, duration = 5200) {
@@ -191,9 +201,9 @@ async function startRoaming() {
     return;
   }
 
-  const { bounds, workArea } = windowState;
-  const minX = workArea.x;
-  const maxX = workArea.x + workArea.width - bounds.width;
+  const { bounds, workArea, contentBounds } = windowState;
+  const minX = workArea.x - contentBounds.left;
+  const maxX = workArea.x + workArea.width - contentBounds.right;
   const usableWidth = Math.max(0, maxX - minX);
 
   if (usableWidth < 32) {
@@ -254,9 +264,9 @@ async function animateRoaming(time = performance.now()) {
 
   if (nextState) {
     windowState = nextState;
-    const { bounds, workArea } = nextState;
-    const minX = workArea.x;
-    const maxX = workArea.x + workArea.width - bounds.width;
+    const { bounds, workArea, contentBounds } = nextState;
+    const minX = workArea.x - contentBounds.left;
+    const maxX = workArea.x + workArea.width - contentBounds.right;
     const hitEdge = bounds.x <= minX + 1 || bounds.x >= maxX - 1;
 
     if (Math.abs(bounds.x - roamState.targetX) <= 2 || hitEdge) {
@@ -293,6 +303,137 @@ function randomFrom(list) {
 
 function randomBetween(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function scheduleContentBoundsMeasurement(delay = 180) {
+  window.clearTimeout(measureTimer);
+  measureTimer = window.setTimeout(() => {
+    measureVisibleVideoBounds();
+  }, delay);
+}
+
+function measureVisibleVideoBounds() {
+  if (!video.videoWidth || !video.videoHeight) {
+    scheduleContentBoundsMeasurement(140);
+    return;
+  }
+
+  const scale = scanWidth / video.videoWidth;
+  const canvas = document.createElement('canvas');
+  canvas.width = scanWidth;
+  canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) return;
+
+  context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+  const frame = context.getImageData(0, 0, canvas.width, canvas.height);
+  const visible = findVisiblePixelBounds(frame.data, canvas.width, canvas.height);
+
+  if (!visible) {
+    scheduleContentBoundsMeasurement(220);
+    return;
+  }
+
+  const nextBounds = {
+    left: visible.left / scale,
+    top: visible.top / scale,
+    right: (visible.right + 1) / scale,
+    bottom: (visible.bottom + 1) / scale
+  };
+
+  measuredVideoBounds = measuredVideoBounds ? unionVideoBounds(measuredVideoBounds, nextBounds) : nextBounds;
+
+  updateContentBounds();
+
+  if (measureSamplesLeft > 0) {
+    measureSamplesLeft -= 1;
+    scheduleContentBoundsMeasurement(measureSampleInterval);
+  }
+}
+
+function findVisiblePixelBounds(data, width, height) {
+  let left = width;
+  let top = height;
+  let right = -1;
+  let bottom = -1;
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const alpha = data[(y * width + x) * 4 + 3];
+      if (alpha <= alphaThreshold) continue;
+
+      if (x < left) left = x;
+      if (x > right) right = x;
+      if (y < top) top = y;
+      if (y > bottom) bottom = y;
+    }
+  }
+
+  if (right < left || bottom < top) return null;
+
+  return { left, top, right, bottom };
+}
+
+function unionVideoBounds(current, next) {
+  return {
+    left: Math.min(current.left, next.left),
+    top: Math.min(current.top, next.top),
+    right: Math.max(current.right, next.right),
+    bottom: Math.max(current.bottom, next.bottom)
+  };
+}
+
+function updateContentBounds() {
+  if (!measuredVideoBounds) return;
+
+  const videoRect = video.getBoundingClientRect();
+  const renderedVideo = getRenderedVideoRect(videoRect);
+  const mappedBounds = mapVideoBoundsToWindow(renderedVideo);
+
+  window.desktopPet.setContentBounds(mappedBounds).then((nextState) => {
+    if (nextState) windowState = nextState;
+  });
+}
+
+function getRenderedVideoRect(videoRect) {
+  const videoRatio = video.videoWidth / video.videoHeight;
+  const elementRatio = videoRect.width / videoRect.height;
+
+  if (elementRatio > videoRatio) {
+    const width = videoRect.height * videoRatio;
+    return {
+      x: videoRect.left + (videoRect.width - width) / 2,
+      y: videoRect.top,
+      width,
+      height: videoRect.height
+    };
+  }
+
+  const height = videoRect.width / videoRatio;
+  return {
+    x: videoRect.left,
+    y: videoRect.top + (videoRect.height - height) / 2,
+    width: videoRect.width,
+    height
+  };
+}
+
+function mapVideoBoundsToWindow(renderedVideo) {
+  const scaleX = renderedVideo.width / video.videoWidth;
+  const scaleY = renderedVideo.height / video.videoHeight;
+  const rawLeft = measuredVideoBounds.left * scaleX;
+  const rawRight = measuredVideoBounds.right * scaleX;
+  const leftOffset = lastDirection < 0 ? renderedVideo.width - rawRight : rawLeft;
+  const rightOffset = lastDirection < 0 ? renderedVideo.width - rawLeft : rawRight;
+
+  return {
+    left: renderedVideo.x + leftOffset,
+    top: renderedVideo.y + measuredVideoBounds.top * scaleY,
+    right: renderedVideo.x + rightOffset,
+    bottom: renderedVideo.y + measuredVideoBounds.bottom * scaleY
+  };
 }
 
 function getPointerPoint(event) {
@@ -439,6 +580,18 @@ window.desktopPet.onSayRandom(() => {
 
 video.addEventListener('ended', () => {
   if (temporaryActions.has(currentAction)) setAction(randomFrom(idleActions));
+});
+
+video.addEventListener('loadeddata', () => {
+  scheduleContentBoundsMeasurement(120);
+});
+
+video.addEventListener('playing', () => {
+  scheduleContentBoundsMeasurement(180);
+});
+
+window.addEventListener('resize', () => {
+  updateContentBounds();
 });
 
 setAction('sit');

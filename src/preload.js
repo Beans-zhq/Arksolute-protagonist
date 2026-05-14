@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('desktopPet', {
   minimize: () => ipcRenderer.invoke('pet:minimize'),
   getWindowState: () => ipcRenderer.invoke('pet:get-window-state'),
   setWindowPosition: (position) => ipcRenderer.invoke('pet:set-window-position', position),
+  setContentBounds: (bounds) => ipcRenderer.invoke('pet:set-content-bounds', bounds),
   beginDrag: () => ipcRenderer.invoke('pet:begin-drag'),
   dragWindow: () => ipcRenderer.invoke('pet:drag-window'),
   endDrag: () => ipcRenderer.invoke('pet:end-drag'),
