@@ -1,0 +1,14 @@
+{
+  "name": "arknights-desktop-pet",
+  "version": "0.1.0",
+  "description": "A transparent Windows desktop pet powered by local Arknights WebM assets.",
+  "main": "src/main.js",
+  "private": true,
+  "scripts": {
+    "start": "node ./scripts/start-electron.js",
+    "dev": "node ./scripts/start-electron.js"
+  },
+  "devDependencies": {
+    "electron": "^32.3.3"
+  }
+}
