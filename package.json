@@ -1,7 +1,7 @@
 {
-  "name": "arknights-desktop-pet",
+  "name": "absolute-protagonist-desktop-pet",
   "version": "0.1.0",
-  "description": "A transparent Windows desktop pet powered by local Arknights WebM assets.",
+  "description": "A transparent Windows desktop pet powered by local Absolute protagonist WebM assets.",
   "main": "src/main.js",
   "private": true,
   "scripts": {
