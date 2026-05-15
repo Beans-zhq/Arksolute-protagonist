@@ -47,8 +47,8 @@ body {
 
 .bubble {
   position: absolute;
-  top: 16px;
-  left: 50%;
+  top: var(--bubble-y, 16px);
+  left: var(--bubble-x, 50%);
   z-index: 2;
   width: max-content;
   max-width: min(268px, calc(100vw - 44px));
@@ -64,7 +64,7 @@ body {
   text-wrap: balance;
   box-shadow: 0 10px 24px rgb(0 0 0 / 0.24);
   opacity: 0;
-  transform: translate(-50%, -8px);
+  transform: translate(-50%, calc(-100% - 18px));
   transition: opacity 160ms ease, transform 160ms ease;
   pointer-events: none;
 }
@@ -84,7 +84,7 @@ body {
 
 .bubble.is-visible {
   opacity: 1;
-  transform: translate(-50%, 0);
+  transform: translate(-50%, calc(-100% - 10px));
 }
 
 html[data-direction="left"] {

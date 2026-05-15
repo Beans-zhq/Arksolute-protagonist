@@ -154,6 +154,7 @@ function setDirection(direction) {
 
 function say(text, duration = 5200) {
   bubble.textContent = text;
+  updateContentBounds();
   bubble.classList.add('is-visible');
   window.clearTimeout(bubbleTimer);
   bubbleTimer = window.setTimeout(() => {
@@ -403,6 +404,8 @@ function updateContentBounds() {
   const renderedVideo = getRenderedVideoRect(videoRect);
   const mappedBounds = mapVideoBoundsToWindow(renderedVideo);
 
+  updateBubbleAnchor(mappedBounds);
+
   window.desktopPet.setContentBounds(mappedBounds).then((nextState) => {
     if (nextState) windowState = nextState;
   });
@@ -445,6 +448,21 @@ function mapVideoBoundsToWindow(renderedVideo) {
     right: renderedVideo.x + rightOffset,
     bottom: renderedVideo.y + measuredVideoBounds.bottom * scaleY
   };
+}
+
+function updateBubbleAnchor(bounds) {
+  const shellRect = document.documentElement.getBoundingClientRect();
+  const bubbleRect = bubble.getBoundingClientRect();
+  const padding = 8;
+  const halfBubbleWidth = Math.max(80, bubbleRect.width / 2);
+  const minX = padding + halfBubbleWidth;
+  const maxX = shellRect.width - padding - halfBubbleWidth;
+  const visibleCenterX = bounds.left + (bounds.right - bounds.left) / 2;
+  const x = clamp(visibleCenterX, minX, Math.max(minX, maxX));
+  const y = Math.max(48, bounds.top - 2);
+
+  document.documentElement.style.setProperty('--bubble-x', `${Math.round(x)}px`);
+  document.documentElement.style.setProperty('--bubble-y', `${Math.round(y)}px`);
 }
 
 function setMouseEventsIgnored(ignored) {
