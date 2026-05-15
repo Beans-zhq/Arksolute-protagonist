@@ -74,6 +74,9 @@ async function main() {
     [
       '-nologo',
       '-spdb',
+      '-sice:ICE38',
+      '-sice:ICE64',
+      '-sice:ICE91',
       '-out',
       outputMsi,
       path.join(msiBuildDir, 'Product.wixobj'),
@@ -170,15 +173,25 @@ function getProductWxs(version, description) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product Id="*" Name="${xml(appName)}" Language="2052" Codepage="65001" Version="${xml(version)}" Manufacturer="${xml(manufacturer)}" UpgradeCode="${upgradeCode}">
-    <Package InstallerVersion="500" Compressed="yes" InstallScope="perMachine" Description="${xml(description)}" />
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser" InstallPrivileges="limited" Description="${xml(description)}" />
     <MajorUpgrade AllowSameVersionUpgrades="yes" DowngradeErrorMessage="A newer version of ${xml(appName)} is already installed." />
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
     <Property Id="ARPNOREPAIR" Value="1" />
-    <Property Id="ARPNOMODIFY" Value="1" />
+    <CustomAction Id="CleanupDesktopShortcut" Directory="SystemFolder" Execute="deferred" Impersonate="yes" Return="ignore" ExeCommand='cmd.exe /c del /f /q "[DesktopFolder]${xml(appName)}.lnk"' />
+    <CustomAction Id="CleanupStartMenuFolder" Directory="SystemFolder" Execute="deferred" Impersonate="yes" Return="ignore" ExeCommand='cmd.exe /c rmdir /s /q "[ApplicationProgramsFolder]"' />
+    <InstallExecuteSequence>
+      <Custom Action="CleanupDesktopShortcut" After="RemoveShortcuts">REMOVE="ALL"</Custom>
+      <Custom Action="CleanupStartMenuFolder" After="CleanupDesktopShortcut">REMOVE="ALL"</Custom>
+    </InstallExecuteSequence>
 
     <Directory Id="TARGETDIR" Name="SourceDir">
-      <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLFOLDER" Name="${xml(appName)}" />
+      <Directory Id="WindowsFolder">
+        <Directory Id="SystemFolder" Name="System32" />
+      </Directory>
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="ProgramsFolder" Name="Programs">
+          <Directory Id="INSTALLFOLDER" Name="${xml(appName)}" />
+        </Directory>
       </Directory>
       <Directory Id="ProgramMenuFolder">
         <Directory Id="ApplicationProgramsFolder" Name="${xml(appName)}" />
@@ -190,7 +203,10 @@ function getProductWxs(version, description) {
       <Component Id="ApplicationShortcuts" Guid="D16716F9-34AA-4736-B71A-0DA519F8B791">
         <Shortcut Id="StartMenuShortcut" Directory="ApplicationProgramsFolder" Name="${xml(appName)}" Description="${xml(description)}" Target="[INSTALLFOLDER]${xml(exeName)}" WorkingDirectory="INSTALLFOLDER" Advertise="no" />
         <Shortcut Id="DesktopShortcut" Directory="DesktopFolder" Name="${xml(appName)}" Description="${xml(description)}" Target="[INSTALLFOLDER]${xml(exeName)}" WorkingDirectory="INSTALLFOLDER" Advertise="no" />
+        <RemoveFile Id="RemoveStartMenuShortcut" Directory="ApplicationProgramsFolder" Name="${xml(appName)}.lnk" On="uninstall" />
+        <RemoveFile Id="RemoveDesktopShortcut" Directory="DesktopFolder" Name="${xml(appName)}.lnk" On="uninstall" />
         <RemoveFolder Id="ApplicationProgramsFolder" Directory="ApplicationProgramsFolder" On="uninstall" />
+        <RemoveFolder Id="InstallFolder" Directory="INSTALLFOLDER" On="uninstall" />
         <RegistryValue Root="HKCU" Key="Software\\${xml(appName)}" Name="installed" Type="integer" Value="1" KeyPath="yes" />
       </Component>
     </DirectoryRef>
