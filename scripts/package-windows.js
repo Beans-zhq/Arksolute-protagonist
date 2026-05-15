@@ -13,6 +13,7 @@ const assetsDir = path.join(packageDir, 'assets');
 const launcherBuildDir = path.join(distDir, '.launcher-build');
 const exeName = 'Absolute protagonist.exe';
 const runtimeExeName = 'Absolute protagonist Runtime.exe';
+const keptLocaleFiles = new Set(['en-US.pak', 'zh-CN.pak', 'zh-TW.pak']);
 
 function ensureElectronRuntime() {
   const electronExe = path.join(electronDistDir, 'electron.exe');
@@ -41,6 +42,24 @@ function copyElectronRuntime() {
   const runtimeExe = path.join(runtimeDir, runtimeExeName);
   if (fs.existsSync(runtimeExe)) fs.rmSync(runtimeExe);
   fs.renameSync(electronExe, runtimeExe);
+
+  pruneElectronRuntime();
+}
+
+function pruneElectronRuntime() {
+  // Keep resources/default_app.asar: this package launches Electron with
+  // data/app as an argument, and Electron uses the default app to load it.
+  pruneLocales();
+}
+
+function pruneLocales() {
+  const localesDir = path.join(runtimeDir, 'locales');
+  if (!fs.existsSync(localesDir)) return;
+
+  for (const entry of fs.readdirSync(localesDir, { withFileTypes: true })) {
+    if (!entry.isFile() || keptLocaleFiles.has(entry.name)) continue;
+    fs.rmSync(path.join(localesDir, entry.name), { force: true });
+  }
 }
 
 function copyAppFiles() {
