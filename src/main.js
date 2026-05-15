@@ -28,6 +28,7 @@ function createMainWindow() {
     hasShadow: false,
     skipTaskbar: true,
     alwaysOnTop: lockedOnTop,
+    icon: getIconPath('png'),
     backgroundColor: '#00000000',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -69,6 +70,21 @@ function getAssetRootPath() {
     path.resolve(app.getAppPath(), '..', 'assets'),
     path.resolve(app.getAppPath(), '..', '..', 'assets'),
     path.resolve(process.cwd(), 'assets')
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+
+  return candidates[0];
+}
+
+function getIconPath(extension = 'png') {
+  const candidates = [
+    path.resolve(app.getAppPath(), 'icon', `icon.${extension}`),
+    path.resolve(app.getAppPath(), '..', 'icon', `icon.${extension}`),
+    path.resolve(app.getAppPath(), '..', '..', 'icon', `icon.${extension}`),
+    path.resolve(process.cwd(), 'icon', `icon.${extension}`)
   ];
 
   for (const candidate of candidates) {
@@ -223,8 +239,8 @@ function actionLabel(action) {
 app.whenReady().then(() => {
   createMainWindow();
 
-  tray = new Tray(nativeImage.createFromPath(path.join(getAssetRootPath(), 'tray-icon.svg')));
-  tray.setToolTip('维什戴尔桌面宠物');
+  tray = new Tray(nativeImage.createFromPath(getIconPath('png')));
+  tray.setToolTip('Absolute protagonist');
   tray.setContextMenu(buildContextMenu());
   tray.on('click', () => {
     if (!mainWindow || mainWindow.isDestroyed()) createMainWindow();

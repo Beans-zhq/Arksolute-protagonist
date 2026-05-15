@@ -25,16 +25,16 @@ Function ShortcutOptionsPage
     Abort
   ${EndIf}
 
-  ${NSD_CreateLabel} 0u 0u 100% 24u "Choose shortcuts to create:"
+  ${NSD_CreateLabel} 0u 0u 100% 24u "选择要创建的快捷方式："
   Pop $ShortcutLabel
 
-  ${NSD_CreateCheckbox} 0u 34u 100% 12u "Create desktop shortcut"
+  ${NSD_CreateCheckbox} 0u 34u 100% 12u "创建桌面快捷方式"
   Pop $DesktopShortcutCheckbox
   ${If} $CreateDesktopShortcut == ${BST_CHECKED}
     ${NSD_Check} $DesktopShortcutCheckbox
   ${EndIf}
 
-  ${NSD_CreateCheckbox} 0u 56u 100% 12u "Create Start Menu shortcut"
+  ${NSD_CreateCheckbox} 0u 56u 100% 12u "创建开始菜单快捷方式"
   Pop $StartMenuShortcutCheckbox
   ${If} $CreateStartMenuShortcut == ${BST_CHECKED}
     ${NSD_Check} $StartMenuShortcutCheckbox
