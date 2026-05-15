@@ -2,16 +2,24 @@ const video = document.getElementById('petVideo');
 const bubble = document.getElementById('bubble');
 const dragRegion = document.getElementById('dragRegion');
 
-const assetFiles = {
+const baseActionNames = {
+  sit: 'Sit',
+  relax: 'Relax',
+  sleep: 'Sleep',
+  move: 'Move',
+  interact: 'Interact'
+};
+
+let assetFiles = {
   sit: '维什戴尔-绝对主角-基建-Sit-x1.webm',
   relax: '维什戴尔-绝对主角-基建-Relax-x1.webm',
   sleep: '维什戴尔-绝对主角-基建-Sleep-x1.webm',
   move: '维什戴尔-绝对主角-基建-Move-x1.webm',
-  interact: '维什戴尔-绝对主角-基建-Interact-x1.webm',
-  special: '维什戴尔-绝对主角-基建-Special-x1.webm'
+  interact: '维什戴尔-绝对主角-基建-Interact-x1.webm'
 };
 
 let assetRootUrl = '../assets/';
+let specialAssetFiles = ['维什戴尔-绝对主角-基建-Special-x1.webm'];
 
 const idleActions = ['sit', 'relax'];
 const temporaryActions = new Set(['interact', 'special']);
@@ -147,6 +155,7 @@ let measureSamplesLeft = 0;
 let hitMap = null;
 let mouseEventsIgnored = false;
 let isRoaming = false;
+let currentAssetFile = assetFiles.sit;
 
 const clickThreshold = 5;
 const dragSampleMs = 16;
@@ -155,18 +164,62 @@ const scanWidth = 180;
 const measureSampleCount = 8;
 const measureSampleInterval = 180;
 
+function configureAssetFiles(files) {
+  if (!Array.isArray(files) || files.length === 0) return;
+
+  const nextAssetFiles = { ...assetFiles };
+  const nextSpecialAssetFiles = [];
+  const baseNamesByAssetName = Object.fromEntries(
+    Object.entries(baseActionNames).map(([action, assetName]) => [assetName.toLowerCase(), action])
+  );
+
+  for (const file of files) {
+    if (typeof file !== 'string' || !file.toLowerCase().endsWith('.webm')) continue;
+
+    const actionName = getActionNameFromAssetFile(file);
+    const baseAction = actionName ? baseNamesByAssetName[actionName.toLowerCase()] : null;
+
+    if (baseAction) {
+      nextAssetFiles[baseAction] = file;
+    } else {
+      nextSpecialAssetFiles.push(file);
+    }
+  }
+
+  assetFiles = nextAssetFiles;
+  if (nextSpecialAssetFiles.length > 0) {
+    specialAssetFiles = nextSpecialAssetFiles;
+  }
+}
+
+function getActionNameFromAssetFile(file) {
+  const match = file.match(/-([^-]+)-x\d+\.webm$/i);
+  if (match) return match[1];
+
+  const stem = file.replace(/\.webm$/i, '');
+  return stem.split('-').pop();
+}
+
+function getAssetFileForAction(action) {
+  if (action === 'special') return randomFrom(specialAssetFiles);
+  return assetFiles[action];
+}
+
 function setAction(action, options = {}) {
-  if (!assetFiles[action]) return;
+  const assetFile = getAssetFileForAction(action);
+  if (!assetFile) return;
 
   const sameAction = currentAction === action;
+  const sameAsset = currentAssetFile === assetFile;
   currentAction = action;
-  video.src = new URL(assetFiles[action], assetRootUrl).href;
+  currentAssetFile = assetFile;
+  video.src = new URL(assetFile, assetRootUrl).href;
   video.loop = !temporaryActions.has(action);
   measuredVideoBounds = null;
   hitMap = null;
   measureSamplesLeft = measureSampleCount;
 
-  if (sameAction && options.restart) {
+  if (sameAction && (options.restart || (action === 'special' && sameAsset))) {
     try {
       video.pause();
       video.currentTime = 0;
@@ -759,6 +812,7 @@ window.addEventListener('resize', () => {
 
 async function boot() {
   assetRootUrl = await window.desktopPet.getAssetRootUrl();
+  configureAssetFiles(await window.desktopPet.getAssetFiles());
   setAction('sit');
   setDirection(1);
   setMouseEventsIgnored(true);

@@ -79,6 +79,20 @@ function getAssetRootPath() {
   return candidates[0];
 }
 
+function getAssetFiles() {
+  const assetRootPath = getAssetRootPath();
+
+  try {
+    return fs
+      .readdirSync(assetRootPath, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.webm'))
+      .map((entry) => entry.name)
+      .sort((a, b) => a.localeCompare(b));
+  } catch {
+    return [];
+  }
+}
+
 function getIconPath(extension = 'png') {
   const candidates = [
     path.resolve(app.getAppPath(), 'icon', `icon.${extension}`),
@@ -271,6 +285,8 @@ ipcMain.handle('pet:set-mouse-events-ignored', (_event, ignored) => {
 });
 
 ipcMain.handle('pet:get-asset-root-url', () => pathToFileURL(getAssetRootPath() + path.sep).href);
+
+ipcMain.handle('pet:get-asset-files', () => getAssetFiles());
 
 ipcMain.handle('pet:get-window-state', () => getWindowState());
 
