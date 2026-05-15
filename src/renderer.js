@@ -2,14 +2,16 @@ const video = document.getElementById('petVideo');
 const bubble = document.getElementById('bubble');
 const dragRegion = document.getElementById('dragRegion');
 
-const assets = {
-  sit: '../assets/维什戴尔-绝对主角-基建-Sit-x1.webm',
-  relax: '../assets/维什戴尔-绝对主角-基建-Relax-x1.webm',
-  sleep: '../assets/维什戴尔-绝对主角-基建-Sleep-x1.webm',
-  move: '../assets/维什戴尔-绝对主角-基建-Move-x1.webm',
-  interact: '../assets/维什戴尔-绝对主角-基建-Interact-x1.webm',
-  special: '../assets/维什戴尔-绝对主角-基建-Special-x1.webm'
+const assetFiles = {
+  sit: '维什戴尔-绝对主角-基建-Sit-x1.webm',
+  relax: '维什戴尔-绝对主角-基建-Relax-x1.webm',
+  sleep: '维什戴尔-绝对主角-基建-Sleep-x1.webm',
+  move: '维什戴尔-绝对主角-基建-Move-x1.webm',
+  interact: '维什戴尔-绝对主角-基建-Interact-x1.webm',
+  special: '维什戴尔-绝对主角-基建-Special-x1.webm'
 };
+
+let assetRootUrl = '../assets/';
 
 const idleActions = ['sit', 'relax'];
 const temporaryActions = new Set(['interact', 'special']);
@@ -154,11 +156,11 @@ const measureSampleCount = 8;
 const measureSampleInterval = 180;
 
 function setAction(action, options = {}) {
-  if (!assets[action]) return;
+  if (!assetFiles[action]) return;
 
   const sameAction = currentAction === action;
   currentAction = action;
-  video.src = assets[action];
+  video.src = new URL(assetFiles[action], assetRootUrl).href;
   video.loop = !temporaryActions.has(action);
   measuredVideoBounds = null;
   hitMap = null;
@@ -718,10 +720,15 @@ window.addEventListener('resize', () => {
   updateContentBounds();
 });
 
-setAction('sit');
-setDirection(1);
-setMouseEventsIgnored(true);
-window.setTimeout(() => say('博士，我在桌面待命。', 4200), 800);
-scheduleIdleAction();
-scheduleTalking();
-scheduleRoaming(3200);
+async function boot() {
+  assetRootUrl = await window.desktopPet.getAssetRootUrl();
+  setAction('sit');
+  setDirection(1);
+  setMouseEventsIgnored(true);
+  window.setTimeout(() => say('博士，我在桌面待命。', 4200), 800);
+  scheduleIdleAction();
+  scheduleTalking();
+  scheduleRoaming(3200);
+}
+
+boot();

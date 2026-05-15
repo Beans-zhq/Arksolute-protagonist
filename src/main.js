@@ -1,5 +1,7 @@
 const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, screen } = require('electron');
+const fs = require('node:fs');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
 let mainWindow;
 let tray;
@@ -59,6 +61,21 @@ function placeWindowOnDesktop() {
 function sendToPet(channel, payload) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send(channel, payload);
+}
+
+function getAssetRootPath() {
+  const candidates = [
+    path.resolve(app.getAppPath(), 'assets'),
+    path.resolve(app.getAppPath(), '..', 'assets'),
+    path.resolve(app.getAppPath(), '..', '..', 'assets'),
+    path.resolve(process.cwd(), 'assets')
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+
+  return candidates[0];
 }
 
 function setMouseEventsIgnored(ignored) {
@@ -206,7 +223,7 @@ function actionLabel(action) {
 app.whenReady().then(() => {
   createMainWindow();
 
-  tray = new Tray(nativeImage.createFromPath(path.join(__dirname, '..', 'assets', 'tray-icon.svg')));
+  tray = new Tray(nativeImage.createFromPath(path.join(getAssetRootPath(), 'tray-icon.svg')));
   tray.setToolTip('维什戴尔桌面宠物');
   tray.setContextMenu(buildContextMenu());
   tray.on('click', () => {
@@ -236,6 +253,8 @@ ipcMain.handle('pet:minimize', () => {
 ipcMain.handle('pet:set-mouse-events-ignored', (_event, ignored) => {
   setMouseEventsIgnored(Boolean(ignored));
 });
+
+ipcMain.handle('pet:get-asset-root-url', () => pathToFileURL(getAssetRootPath() + path.sep).href);
 
 ipcMain.handle('pet:get-window-state', () => getWindowState());
 

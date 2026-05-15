@@ -1,13 +1,18 @@
 const fs = require('node:fs');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const rootDir = path.resolve(__dirname, '..');
 const electronDistDir = path.join(rootDir, 'node_modules', 'electron', 'dist');
 const distDir = path.join(rootDir, 'dist');
-const packageDir = path.join(distDir, 'win-unpacked');
-const resourcesDir = path.join(packageDir, 'resources');
-const appDir = path.join(resourcesDir, 'app');
-const exeName = '维什戴尔桌面宠物.exe';
+const packageDir = path.join(distDir, 'Absolute protagonist');
+const dataDir = path.join(packageDir, 'data');
+const appDir = path.join(dataDir, 'app');
+const runtimeDir = path.join(dataDir, 'runtime');
+const assetsDir = path.join(packageDir, 'assets');
+const launcherBuildDir = path.join(distDir, '.launcher-build');
+const exeName = 'Absolute protagonist.exe';
+const runtimeExeName = 'Absolute protagonist Runtime.exe';
 
 function ensureElectronRuntime() {
   const electronExe = path.join(electronDistDir, 'electron.exe');
@@ -18,24 +23,29 @@ function ensureElectronRuntime() {
 
 function cleanOutput() {
   fs.rmSync(packageDir, { recursive: true, force: true });
+  fs.rmSync(path.join(distDir, 'win-unpacked'), { recursive: true, force: true });
+  fs.rmSync(path.join(distDir, '维什戴尔桌面宠物-windows.zip'), { force: true });
+  fs.rmSync(path.join(distDir, 'Absolute protagonist-windows.zip'), { force: true });
+  fs.rmSync(launcherBuildDir, { recursive: true, force: true });
   fs.mkdirSync(appDir, { recursive: true });
+  fs.mkdirSync(runtimeDir, { recursive: true });
+  fs.mkdirSync(assetsDir, { recursive: true });
 }
 
 function copyElectronRuntime() {
-  fs.cpSync(electronDistDir, packageDir, {
-    recursive: true,
-    filter: (source) => !source.endsWith(path.join('resources', 'default_app.asar'))
+  fs.cpSync(electronDistDir, runtimeDir, {
+    recursive: true
   });
 
-  const electronExe = path.join(packageDir, 'electron.exe');
-  const appExe = path.join(packageDir, exeName);
-  if (fs.existsSync(appExe)) fs.rmSync(appExe);
-  fs.renameSync(electronExe, appExe);
+  const electronExe = path.join(runtimeDir, 'electron.exe');
+  const runtimeExe = path.join(runtimeDir, runtimeExeName);
+  if (fs.existsSync(runtimeExe)) fs.rmSync(runtimeExe);
+  fs.renameSync(electronExe, runtimeExe);
 }
 
 function copyAppFiles() {
   fs.cpSync(path.join(rootDir, 'src'), path.join(appDir, 'src'), { recursive: true });
-  fs.cpSync(path.join(rootDir, 'assets'), path.join(appDir, 'assets'), { recursive: true });
+  fs.cpSync(path.join(rootDir, 'assets'), assetsDir, { recursive: true });
 
   for (const file of ['README.md', 'LICENSE']) {
     const source = path.join(rootDir, file);
@@ -58,11 +68,90 @@ function copyAppFiles() {
   );
 }
 
+function buildLauncher() {
+  const sourceDir = path.join(launcherBuildDir, 'src');
+  const outputDir = path.join(launcherBuildDir, 'output');
+  fs.mkdirSync(sourceDir, { recursive: true });
+  fs.mkdirSync(outputDir, { recursive: true });
+
+  const sourceFile = path.join(sourceDir, 'Program.cs');
+  const launcherExe = path.join(outputDir, exeName);
+  fs.writeFileSync(sourceFile, getLauncherSource(), 'utf8');
+
+  const cscPath = getCscPath();
+  const result = spawnSync(cscPath, ['/nologo', '/target:winexe', `/out:${launcherExe}`, sourceFile], {
+    stdio: 'inherit'
+  });
+
+  if (result.status !== 0) {
+    throw new Error('Failed to build Windows launcher.');
+  }
+
+  if (!fs.existsSync(launcherExe)) {
+    throw new Error('Launcher build succeeded but exe was not found.');
+  }
+
+  fs.copyFileSync(launcherExe, path.join(packageDir, exeName));
+}
+
+function getCscPath() {
+  const candidates = [
+    path.join(process.env.WINDIR || 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe'),
+    path.join(process.env.WINDIR || 'C:\\Windows', 'Microsoft.NET', 'Framework', 'v4.0.30319', 'csc.exe')
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+
+  throw new Error('Cannot find csc.exe. Install .NET Framework build tools or adjust package script.');
+}
+
+function getLauncherSource() {
+  return `using System;
+using System.Diagnostics;
+using System.IO;
+
+namespace AbsoluteProtagonistLauncher
+{
+    internal static class Program
+    {
+        private static int Main()
+        {
+            string root = AppDomain.CurrentDomain.BaseDirectory;
+            string runtimeExe = Path.Combine(root, "data", "runtime", "${runtimeExeName}");
+            string appPath = Path.Combine(root, "data", "app");
+
+            if (!File.Exists(runtimeExe))
+            {
+                return 2;
+            }
+
+            if (!Directory.Exists(appPath))
+            {
+                return 3;
+            }
+
+            ProcessStartInfo startInfo = new ProcessStartInfo();
+            startInfo.FileName = runtimeExe;
+            startInfo.WorkingDirectory = root;
+            startInfo.UseShellExecute = false;
+            startInfo.Arguments = "\\\"" + appPath + "\\\"";
+
+            Process.Start(startInfo);
+            return 0;
+        }
+    }
+}
+`;
+}
+
 function main() {
   ensureElectronRuntime();
   cleanOutput();
   copyElectronRuntime();
   copyAppFiles();
+  buildLauncher();
 
   console.log(`Packaged Windows app: ${path.join(packageDir, exeName)}`);
 }

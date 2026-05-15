@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('desktopPet', {
   showMenu: () => ipcRenderer.invoke('pet:show-menu'),
   minimize: () => ipcRenderer.invoke('pet:minimize'),
   setMouseEventsIgnored: (ignored) => ipcRenderer.invoke('pet:set-mouse-events-ignored', ignored),
+  getAssetRootUrl: () => ipcRenderer.invoke('pet:get-asset-root-url'),
   getWindowState: () => ipcRenderer.invoke('pet:get-window-state'),
   setWindowPosition: (position) => ipcRenderer.invoke('pet:set-window-position', position),
   setContentBounds: (bounds) => ipcRenderer.invoke('pet:set-content-bounds', bounds),
