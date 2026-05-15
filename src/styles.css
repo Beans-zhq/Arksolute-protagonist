@@ -50,8 +50,8 @@ body {
   top: var(--bubble-y, 16px);
   left: var(--bubble-x, 50%);
   z-index: 2;
-  width: max-content;
-  max-width: min(268px, calc(100vw - 44px));
+  width: fit-content;
+  max-width: min(var(--bubble-max-width, 238px), calc(100vw - 44px));
   min-height: 42px;
   padding: 10px 13px;
   border: 1px solid rgb(255 255 255 / 0.68);
@@ -61,7 +61,8 @@ body {
   font-size: 13px;
   line-height: 1.45;
   text-align: left;
-  text-wrap: balance;
+  white-space: normal;
+  overflow-wrap: break-word;
   box-shadow: 0 10px 24px rgb(0 0 0 / 0.24);
   opacity: 0;
   transform: translate(-50%, calc(-100% - 18px));

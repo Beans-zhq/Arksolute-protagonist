@@ -197,6 +197,7 @@ function setDirection(direction) {
 
 function say(text, duration = 5200) {
   bubble.textContent = text;
+  updateBubbleWidth(text);
   updateContentBounds();
   bubble.classList.add('is-visible');
   window.clearTimeout(bubbleTimer);
@@ -354,6 +355,12 @@ function randomFrom(list) {
 
 function randomBetween(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function updateBubbleWidth(text) {
+  const length = Array.from(text).length;
+  const maxWidth = clamp(86 + length * 6, 150, 238);
+  document.documentElement.style.setProperty('--bubble-max-width', `${Math.round(maxWidth)}px`);
 }
 
 function scheduleContentBoundsMeasurement(delay = 180) {
