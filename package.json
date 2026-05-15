@@ -7,10 +7,11 @@
   "scripts": {
     "start": "node ./scripts/start-electron.js",
     "dev": "node ./scripts/start-electron.js",
-    "package:win": "node ./scripts/package-windows.js",
-    "package:msi": "node ./scripts/package-msi.js"
+    "package:win": "npm run package:installer",
+    "package:installer": "node ./scripts/package-installer.js"
   },
   "devDependencies": {
-    "electron": "^32.3.3"
+    "electron": "^32.3.3",
+    "electron-builder": "^26.8.1"
   }
 }

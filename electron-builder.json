@@ -1,0 +1,40 @@
+{
+  "appId": "com.absolute-protagonist.desktop-pet",
+  "productName": "Absolute protagonist",
+  "directories": {
+    "output": "dist"
+  },
+  "files": [
+    "src/**/*",
+    "assets/**/*",
+    "package.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "asar": false,
+  "compression": "maximum",
+  "npmRebuild": false,
+  "win": {
+    "target": [
+      {
+        "target": "nsis",
+        "arch": [
+          "x64"
+        ]
+      }
+    ],
+    "artifactName": "Absolute protagonist Setup.exe"
+  },
+  "nsis": {
+    "oneClick": false,
+    "perMachine": false,
+    "allowElevation": false,
+    "allowToChangeInstallationDirectory": true,
+    "include": "scripts/nsis-installer.nsh",
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "Absolute protagonist",
+    "uninstallDisplayName": "Absolute protagonist",
+    "deleteAppDataOnUninstall": false
+  }
+}
