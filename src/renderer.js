@@ -11,7 +11,7 @@ const assets = {
   special: '../assets/维什戴尔-绝对主角-基建-Special-x1.webm'
 };
 
-const idleActions = ['sit', 'relax', 'move'];
+const idleActions = ['sit', 'relax'];
 const temporaryActions = new Set(['interact', 'special']);
 
 const dailyLines = [
@@ -116,6 +116,7 @@ let measureTimer = null;
 let measureSamplesLeft = 0;
 let hitMap = null;
 let mouseEventsIgnored = false;
+let isRoaming = false;
 
 const clickThreshold = 5;
 const dragSampleMs = 16;
@@ -127,12 +128,24 @@ const measureSampleInterval = 180;
 function setAction(action, options = {}) {
   if (!assets[action]) return;
 
+  const sameAction = currentAction === action;
   currentAction = action;
   video.src = assets[action];
   video.loop = !temporaryActions.has(action);
   measuredVideoBounds = null;
   hitMap = null;
   measureSamplesLeft = measureSampleCount;
+
+  if (sameAction && options.restart) {
+    try {
+      video.pause();
+      video.currentTime = 0;
+    } catch {
+      // ignore
+    }
+    video.load();
+  }
+
   video.play().catch(() => {});
 
   window.clearTimeout(temporaryTimer);
@@ -169,7 +182,7 @@ function sayRandom() {
 function scheduleIdleAction() {
   window.clearTimeout(idleTimer);
   idleTimer = window.setTimeout(() => {
-    if (!temporaryActions.has(currentAction)) {
+    if (!isRoaming && !temporaryActions.has(currentAction)) {
       setAction(randomFrom(idleActions));
     }
     scheduleIdleAction();
@@ -191,14 +204,16 @@ function scheduleRoaming(delay = randomBetween(5000, 13000)) {
   }, delay);
 }
 
-async function startRoaming() {
-  if (isDragging || temporaryActions.has(currentAction)) {
+async function startRoaming(options = {}) {
+  if (isDragging || (!options.force && temporaryActions.has(currentAction))) {
     scheduleRoaming(randomBetween(2400, 5200));
     return;
   }
 
+  isRoaming = true;
   windowState = await window.desktopPet.getWindowState();
   if (!windowState) {
+    isRoaming = false;
     scheduleRoaming();
     return;
   }
@@ -209,6 +224,7 @@ async function startRoaming() {
   const usableWidth = Math.max(0, maxX - minX);
 
   if (usableWidth < 32) {
+    isRoaming = false;
     scheduleRoaming(randomBetween(9000, 16000));
     return;
   }
@@ -224,6 +240,7 @@ async function startRoaming() {
   targetX = clamp(targetX, minX, maxX);
 
   if (Math.abs(targetX - bounds.x) < 48) {
+    isRoaming = false;
     scheduleRoaming(randomBetween(4200, 8000));
     return;
   }
@@ -241,7 +258,7 @@ async function startRoaming() {
   };
 
   setDirection(direction);
-  setAction('move');
+  setAction('move', { restart: true });
   if (Math.random() > 0.38) say(randomFrom(walkLines), 2600);
   animateRoaming();
 }
@@ -285,9 +302,11 @@ function stopRoaming() {
   window.cancelAnimationFrame(roamFrame);
   roamFrame = null;
   roamState = null;
+  isRoaming = false;
 }
 
 function settleAfterRoam(hitEdge = false) {
+  isRoaming = false;
   setAction(randomFrom(['sit', 'relax']));
   if (hitEdge && Math.random() > 0.35) {
     say('到边界了。看来桌面也有尽头。', 3200);
@@ -643,6 +662,10 @@ window.addEventListener('contextmenu', (event) => {
 
 window.desktopPet.onSetAction((action) => {
   stopRoaming();
+  if (action === 'move') {
+    startRoaming({ force: true });
+    return;
+  }
   scheduleRoaming(randomBetween(7000, 14000));
   setAction(action);
 });
