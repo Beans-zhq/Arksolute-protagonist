@@ -6,7 +6,8 @@ const rootDir = path.resolve(__dirname, '..');
 const distDir = path.join(rootDir, 'dist');
 const packageDir = path.join(distDir, 'Absolute protagonist');
 const msiBuildDir = path.join(distDir, '.msi-build');
-const wixCacheDir = path.join(distDir, '.wix-toolset');
+const cacheDir = path.join(rootDir, '.cache');
+const wixCacheDir = path.join(cacheDir, 'wix-toolset');
 const wixBinDir = path.join(wixCacheDir, 'wix314');
 const wixZipPath = path.join(wixCacheDir, 'wix314-binaries.zip');
 const wixDownloadUrl = 'https://github.com/wixtoolset/wix3/releases/download/wix3141rtm/wix314-binaries.zip';
@@ -80,6 +81,8 @@ async function main() {
     ],
     'Failed to link MSI package.'
   );
+
+  fs.rmSync(msiBuildDir, { recursive: true, force: true });
 
   console.log(`Packaged MSI: ${outputMsi}`);
 }
