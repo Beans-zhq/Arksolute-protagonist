@@ -114,6 +114,8 @@ let suppressNextClick = false;
 let measuredVideoBounds = null;
 let measureTimer = null;
 let measureSamplesLeft = 0;
+let hitMap = null;
+let mouseEventsIgnored = false;
 
 const clickThreshold = 5;
 const dragSampleMs = 16;
@@ -129,6 +131,7 @@ function setAction(action, options = {}) {
   video.src = assets[action];
   video.loop = !temporaryActions.has(action);
   measuredVideoBounds = null;
+  hitMap = null;
   measureSamplesLeft = measureSampleCount;
   video.play().catch(() => {});
 
@@ -327,21 +330,22 @@ function measureVisibleVideoBounds() {
   context.drawImage(video, 0, 0, canvas.width, canvas.height);
 
   const frame = context.getImageData(0, 0, canvas.width, canvas.height);
-  const visible = findVisiblePixelBounds(frame.data, canvas.width, canvas.height);
+  const scan = scanVisiblePixels(frame.data, canvas.width, canvas.height);
 
-  if (!visible) {
+  if (!scan.bounds) {
     scheduleContentBoundsMeasurement(220);
     return;
   }
 
   const nextBounds = {
-    left: visible.left / scale,
-    top: visible.top / scale,
-    right: (visible.right + 1) / scale,
-    bottom: (visible.bottom + 1) / scale
+    left: scan.bounds.left / scale,
+    top: scan.bounds.top / scale,
+    right: (scan.bounds.right + 1) / scale,
+    bottom: (scan.bounds.bottom + 1) / scale
   };
 
   measuredVideoBounds = measuredVideoBounds ? unionVideoBounds(measuredVideoBounds, nextBounds) : nextBounds;
+  hitMap = scan.hitMap;
 
   updateContentBounds();
 
@@ -351,17 +355,19 @@ function measureVisibleVideoBounds() {
   }
 }
 
-function findVisiblePixelBounds(data, width, height) {
+function scanVisiblePixels(data, width, height) {
   let left = width;
   let top = height;
   let right = -1;
   let bottom = -1;
+  const pixels = new Uint8Array(width * height);
 
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
       const alpha = data[(y * width + x) * 4 + 3];
       if (alpha <= alphaThreshold) continue;
 
+      pixels[y * width + x] = 1;
       if (x < left) left = x;
       if (x > right) right = x;
       if (y < top) top = y;
@@ -369,9 +375,16 @@ function findVisiblePixelBounds(data, width, height) {
     }
   }
 
-  if (right < left || bottom < top) return null;
+  const bounds = right < left || bottom < top ? null : { left, top, right, bottom };
 
-  return { left, top, right, bottom };
+  return {
+    bounds,
+    hitMap: {
+      width,
+      height,
+      pixels
+    }
+  };
 }
 
 function unionVideoBounds(current, next) {
@@ -434,6 +447,50 @@ function mapVideoBoundsToWindow(renderedVideo) {
   };
 }
 
+function setMouseEventsIgnored(ignored) {
+  if (mouseEventsIgnored === ignored) return;
+
+  mouseEventsIgnored = ignored;
+  window.desktopPet.setMouseEventsIgnored(ignored);
+}
+
+function isVisiblePixelAtPoint(point) {
+  if (!hitMap || !video.videoWidth || !video.videoHeight) return true;
+
+  const videoRect = video.getBoundingClientRect();
+  const renderedVideo = getRenderedVideoRect(videoRect);
+
+  if (
+    point.x < renderedVideo.x ||
+    point.x >= renderedVideo.x + renderedVideo.width ||
+    point.y < renderedVideo.y ||
+    point.y >= renderedVideo.y + renderedVideo.height
+  ) {
+    return false;
+  }
+
+  let videoX = ((point.x - renderedVideo.x) / renderedVideo.width) * hitMap.width;
+  const videoY = ((point.y - renderedVideo.y) / renderedVideo.height) * hitMap.height;
+
+  if (lastDirection < 0) {
+    videoX = hitMap.width - videoX;
+  }
+
+  const x = clamp(Math.floor(videoX), 0, hitMap.width - 1);
+  const y = clamp(Math.floor(videoY), 0, hitMap.height - 1);
+
+  return hitMap.pixels[y * hitMap.width + x] === 1;
+}
+
+function syncMouseHitTest(event) {
+  if (isDragging) {
+    setMouseEventsIgnored(false);
+    return;
+  }
+
+  setMouseEventsIgnored(!isVisiblePixelAtPoint(getPointerPoint(event)));
+}
+
 function getPointerPoint(event) {
   return { x: event.clientX, y: event.clientY };
 }
@@ -444,6 +501,7 @@ function distanceBetween(a, b) {
 
 async function beginManualDrag(event) {
   if (event.button !== 0) return;
+  if (!isVisiblePixelAtPoint(getPointerPoint(event))) return;
   event.preventDefault();
 
   stopRoaming();
@@ -531,6 +589,12 @@ dragRegion.addEventListener('pointerdown', beginManualDrag);
 
 dragRegion.addEventListener('pointermove', updateDragMoved);
 
+window.addEventListener('mousemove', syncMouseHitTest);
+
+window.addEventListener('mouseleave', () => {
+  if (!isDragging) setMouseEventsIgnored(true);
+});
+
 dragRegion.addEventListener('pointerup', endManualDrag);
 
 dragRegion.addEventListener('pointercancel', endManualDrag);
@@ -554,6 +618,7 @@ dragRegion.addEventListener('mouseenter', () => {
 });
 
 window.addEventListener('contextmenu', (event) => {
+  if (!isVisiblePixelAtPoint(getPointerPoint(event))) return;
   event.preventDefault();
   window.desktopPet.showMenu();
 });
@@ -586,6 +651,7 @@ window.addEventListener('resize', () => {
 
 setAction('sit');
 setDirection(1);
+setMouseEventsIgnored(true);
 window.setTimeout(() => say('博士，我在桌面待命。', 4200), 800);
 scheduleIdleAction();
 scheduleTalking();

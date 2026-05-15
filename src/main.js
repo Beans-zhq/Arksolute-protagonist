@@ -6,6 +6,7 @@ let tray;
 let lockedOnTop = true;
 let dragState = null;
 let contentBounds = null;
+let ignoringMouseEvents = false;
 
 const ACTIONS = ['sit', 'relax', 'sleep', 'move', 'interact', 'special'];
 const WINDOW_SIZE = {
@@ -58,6 +59,13 @@ function placeWindowOnDesktop() {
 function sendToPet(channel, payload) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.webContents.send(channel, payload);
+}
+
+function setMouseEventsIgnored(ignored) {
+  if (!mainWindow || mainWindow.isDestroyed() || ignoringMouseEvents === ignored) return;
+
+  ignoringMouseEvents = ignored;
+  mainWindow.setIgnoreMouseEvents(ignored, { forward: true });
 }
 
 function getWindowState() {
@@ -223,6 +231,10 @@ ipcMain.handle('pet:show-menu', () => {
 
 ipcMain.handle('pet:minimize', () => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.minimize();
+});
+
+ipcMain.handle('pet:set-mouse-events-ignored', (_event, ignored) => {
+  setMouseEventsIgnored(Boolean(ignored));
 });
 
 ipcMain.handle('pet:get-window-state', () => getWindowState());
