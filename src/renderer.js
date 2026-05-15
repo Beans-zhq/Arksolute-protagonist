@@ -1,8 +1,6 @@
 const video = document.getElementById('petVideo');
 const bubble = document.getElementById('bubble');
 const dragRegion = document.getElementById('dragRegion');
-const menuButton = document.getElementById('menuButton');
-const minButton = document.getElementById('minButton');
 
 const assets = {
   sit: '../assets/维什戴尔-绝对主角-基建-Sit-x1.webm',
@@ -558,14 +556,6 @@ dragRegion.addEventListener('mouseenter', () => {
 window.addEventListener('contextmenu', (event) => {
   event.preventDefault();
   window.desktopPet.showMenu();
-});
-
-menuButton.addEventListener('click', () => {
-  window.desktopPet.showMenu();
-});
-
-minButton.addEventListener('click', () => {
-  window.desktopPet.minimize();
 });
 
 window.desktopPet.onSetAction((action) => {
