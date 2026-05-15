@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, screen } = require('electron');
+const { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, screen, dialog } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -9,12 +9,14 @@ let lockedOnTop = true;
 let dragState = null;
 let contentBounds = null;
 let ignoringMouseEvents = false;
+let customAssetRootPath = null;
 
 const ACTIONS = ['sit', 'relax', 'sleep', 'move', 'interact', 'special'];
 const WINDOW_SIZE = {
   width: 320,
   height: 392
 };
+const settingsFileName = 'settings.json';
 
 function createMainWindow() {
   mainWindow = new BrowserWindow({
@@ -64,7 +66,40 @@ function sendToPet(channel, payload) {
   mainWindow.webContents.send(channel, payload);
 }
 
-function getAssetRootPath() {
+function getSettingsPath() {
+  return path.join(app.getPath('userData'), settingsFileName);
+}
+
+function loadSettings() {
+  try {
+    const settings = JSON.parse(fs.readFileSync(getSettingsPath(), 'utf8'));
+    if (typeof settings.assetRootPath === 'string' && isDirectory(settings.assetRootPath)) {
+      customAssetRootPath = settings.assetRootPath;
+    }
+  } catch {
+    customAssetRootPath = null;
+  }
+}
+
+function saveSettings() {
+  try {
+    const settingsPath = getSettingsPath();
+    fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+    fs.writeFileSync(settingsPath, JSON.stringify({ assetRootPath: customAssetRootPath }, null, 2), 'utf8');
+  } catch {
+    // ignore settings write failures
+  }
+}
+
+function isDirectory(targetPath) {
+  try {
+    return fs.statSync(targetPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function getDefaultAssetRootPath() {
   const candidates = [
     path.resolve(app.getAppPath(), 'assets'),
     path.resolve(app.getAppPath(), '..', 'assets'),
@@ -79,8 +114,16 @@ function getAssetRootPath() {
   return candidates[0];
 }
 
-function getAssetFiles() {
-  const assetRootPath = getAssetRootPath();
+function getAssetRootPath() {
+  if (customAssetRootPath && isDirectory(customAssetRootPath)) {
+    return customAssetRootPath;
+  }
+
+  return getDefaultAssetRootPath();
+}
+
+function getAssetFiles(assetRootPath = getAssetRootPath()) {
+  if (!isDirectory(assetRootPath)) return [];
 
   try {
     return fs
@@ -91,6 +134,73 @@ function getAssetFiles() {
   } catch {
     return [];
   }
+}
+
+function getAssetBundle() {
+  const rootPath = getAssetRootPath();
+
+  return {
+    rootPath,
+    rootUrl: pathToFileURL(rootPath + path.sep).href,
+    files: getAssetFiles(rootPath),
+    isCustom: customAssetRootPath === rootPath
+  };
+}
+
+function getAssetFolderLabel() {
+  const rootPath = getAssetRootPath();
+  if (!customAssetRootPath || customAssetRootPath !== rootPath) return '内置 assets';
+  return path.basename(rootPath) || rootPath;
+}
+
+async function chooseAssetFolder() {
+  const options = {
+    title: '选择动作文件夹',
+    buttonLabel: '选择此文件夹',
+    defaultPath: getAssetRootPath(),
+    properties: ['openDirectory']
+  };
+  const result =
+    mainWindow && !mainWindow.isDestroyed()
+      ? await dialog.showOpenDialog(mainWindow, options)
+      : await dialog.showOpenDialog(options);
+
+  if (result.canceled || result.filePaths.length === 0) return;
+
+  const nextRootPath = result.filePaths[0];
+  const files = getAssetFiles(nextRootPath);
+
+  if (files.length === 0) {
+    const messageOptions = {
+      type: 'warning',
+      title: '没有找到动作文件',
+      message: '这个文件夹里没有 .webm 动作文件。',
+      detail: '请选择包含 WebM 动作资源的文件夹。'
+    };
+
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      await dialog.showMessageBox(mainWindow, messageOptions);
+    } else {
+      await dialog.showMessageBox(messageOptions);
+    }
+    return;
+  }
+
+  customAssetRootPath = nextRootPath;
+  saveSettings();
+  notifyAssetBundleChanged();
+  if (tray) tray.setContextMenu(buildContextMenu());
+}
+
+function resetAssetFolder() {
+  customAssetRootPath = null;
+  saveSettings();
+  notifyAssetBundleChanged();
+  if (tray) tray.setContextMenu(buildContextMenu());
+}
+
+function notifyAssetBundleChanged() {
+  sendToPet('pet:assets-changed', getAssetBundle());
 }
 
 function getIconPath(extension = 'png') {
@@ -230,6 +340,27 @@ function buildContextMenu() {
       label: '休息一下',
       click: () => sendToPet('pet:set-action', 'sleep')
     },
+    {
+      label: '设置',
+      submenu: [
+        {
+          label: '选择动作文件夹...',
+          click: () => {
+            chooseAssetFolder();
+          }
+        },
+        {
+          label: '恢复默认动作文件夹',
+          enabled: Boolean(customAssetRootPath),
+          click: resetAssetFolder
+        },
+        { type: 'separator' },
+        {
+          label: `当前动作文件夹：${getAssetFolderLabel()}`,
+          enabled: false
+        }
+      ]
+    },
     { type: 'separator' },
     {
       label: '退出桌宠',
@@ -251,6 +382,7 @@ function actionLabel(action) {
 }
 
 app.whenReady().then(() => {
+  loadSettings();
   createMainWindow();
 
   tray = new Tray(nativeImage.createFromPath(getIconPath('png')));
@@ -287,6 +419,8 @@ ipcMain.handle('pet:set-mouse-events-ignored', (_event, ignored) => {
 ipcMain.handle('pet:get-asset-root-url', () => pathToFileURL(getAssetRootPath() + path.sep).href);
 
 ipcMain.handle('pet:get-asset-files', () => getAssetFiles());
+
+ipcMain.handle('pet:get-assets', () => getAssetBundle());
 
 ipcMain.handle('pet:get-window-state', () => getWindowState());
 

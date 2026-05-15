@@ -10,18 +10,20 @@ const baseActionNames = {
   interact: 'Interact'
 };
 
-let assetFiles = {
+const defaultAssetFiles = {
   sit: '维什戴尔-绝对主角-基建-Sit-x1.webm',
   relax: '维什戴尔-绝对主角-基建-Relax-x1.webm',
   sleep: '维什戴尔-绝对主角-基建-Sleep-x1.webm',
   move: '维什戴尔-绝对主角-基建-Move-x1.webm',
   interact: '维什戴尔-绝对主角-基建-Interact-x1.webm'
 };
+const defaultSpecialAssetFiles = ['维什戴尔-绝对主角-基建-Special-x1.webm'];
+
+let assetFiles = { ...defaultAssetFiles };
 
 let assetRootUrl = '../assets/';
-let specialAssetFiles = ['维什戴尔-绝对主角-基建-Special-x1.webm'];
+let specialAssetFiles = [...defaultSpecialAssetFiles];
 
-const idleActions = ['sit', 'relax'];
 const temporaryActions = new Set(['interact', 'special']);
 
 const dailyLines = [
@@ -165,19 +167,15 @@ const measureSampleCount = 8;
 const measureSampleInterval = 180;
 
 function configureAssetFiles(files) {
-  if (!Array.isArray(files) || files.length === 0) return;
+  if (!Array.isArray(files) || files.length === 0) return false;
 
-  const nextAssetFiles = { ...assetFiles };
+  const nextAssetFiles = {};
   const nextSpecialAssetFiles = [];
-  const baseNamesByAssetName = Object.fromEntries(
-    Object.entries(baseActionNames).map(([action, assetName]) => [assetName.toLowerCase(), action])
-  );
 
   for (const file of files) {
     if (typeof file !== 'string' || !file.toLowerCase().endsWith('.webm')) continue;
 
-    const actionName = getActionNameFromAssetFile(file);
-    const baseAction = actionName ? baseNamesByAssetName[actionName.toLowerCase()] : null;
+    const baseAction = getBaseActionFromAssetFile(file);
 
     if (baseAction) {
       nextAssetFiles[baseAction] = file;
@@ -187,22 +185,56 @@ function configureAssetFiles(files) {
   }
 
   assetFiles = nextAssetFiles;
-  if (nextSpecialAssetFiles.length > 0) {
-    specialAssetFiles = nextSpecialAssetFiles;
-  }
+  specialAssetFiles = nextSpecialAssetFiles;
+  return true;
 }
 
-function getActionNameFromAssetFile(file) {
-  const match = file.match(/-([^-]+)-x\d+\.webm$/i);
-  if (match) return match[1];
-
+function getBaseActionFromAssetFile(file) {
   const stem = file.replace(/\.webm$/i, '');
-  return stem.split('-').pop();
+
+  for (const [action, assetName] of Object.entries(baseActionNames)) {
+    const pattern = new RegExp(`(^|[-_\\s])${assetName}($|[-_\\s])`, 'i');
+    if (pattern.test(stem)) return action;
+  }
+
+  return null;
 }
 
 function getAssetFileForAction(action) {
   if (action === 'special') return randomFrom(specialAssetFiles);
   return assetFiles[action];
+}
+
+function getAssetUrl(assetFile) {
+  return new URL(encodeURIComponent(assetFile), assetRootUrl).href;
+}
+
+function getFallbackAction() {
+  return ['sit', 'relax', 'sleep', 'move', 'interact'].find((action) => assetFiles[action]) || null;
+}
+
+function getIdleActions() {
+  const preferredActions = ['sit', 'relax'].filter((action) => assetFiles[action]);
+  if (preferredActions.length > 0) return preferredActions;
+
+  const stableActions = Object.keys(assetFiles).filter((action) => !temporaryActions.has(action));
+  return stableActions.length > 0 ? stableActions : Object.keys(assetFiles);
+}
+
+function applyAssetBundle(bundle) {
+  if (!bundle || !configureAssetFiles(bundle.files)) return false;
+
+  assetRootUrl = bundle.rootUrl;
+  currentAssetFile = null;
+  measuredVideoBounds = null;
+  hitMap = null;
+
+  const nextAction = assetFiles[currentAction] || getFallbackAction();
+  if (nextAction) {
+    setAction(nextAction, { restart: true });
+  }
+
+  return true;
 }
 
 function setAction(action, options = {}) {
@@ -213,7 +245,7 @@ function setAction(action, options = {}) {
   const sameAsset = currentAssetFile === assetFile;
   currentAction = action;
   currentAssetFile = assetFile;
-  video.src = new URL(assetFile, assetRootUrl).href;
+  video.src = getAssetUrl(assetFile);
   video.loop = !temporaryActions.has(action);
   measuredVideoBounds = null;
   hitMap = null;
@@ -234,7 +266,7 @@ function setAction(action, options = {}) {
   window.clearTimeout(temporaryTimer);
   if (temporaryActions.has(action)) {
     temporaryTimer = window.setTimeout(() => {
-      setAction(randomFrom(idleActions));
+      setAction(randomFrom(getIdleActions()));
     }, options.duration || (action === 'special' ? 7600 : 3400));
   }
 }
@@ -266,7 +298,7 @@ function scheduleIdleAction() {
   window.clearTimeout(idleTimer);
   idleTimer = window.setTimeout(() => {
     if (!isRoaming && !temporaryActions.has(currentAction)) {
-      setAction(randomFrom(idleActions));
+      setAction(randomFrom(getIdleActions()));
     }
     scheduleIdleAction();
   }, randomBetween(18000, 42000));
@@ -390,7 +422,7 @@ function stopRoaming() {
 
 function settleAfterRoam(hitEdge = false) {
   isRoaming = false;
-  setAction(randomFrom(['sit', 'relax']));
+  setAction(randomFrom(getIdleActions()));
   if (hitEdge && Math.random() > 0.35) {
     say('到边界了。看来桌面也有尽头。', 3200);
   }
@@ -402,6 +434,7 @@ function clamp(value, min, max) {
 }
 
 function randomFrom(list) {
+  if (!Array.isArray(list) || list.length === 0) return null;
   return list[Math.floor(Math.random() * list.length)];
 }
 
@@ -794,8 +827,21 @@ window.desktopPet.onSayRandom(() => {
   sayRandom();
 });
 
+window.desktopPet.onAssetsChanged((assets) => {
+  stopRoaming();
+  window.clearTimeout(roamTimer);
+
+  if (applyAssetBundle(assets)) {
+    say('动作文件夹已切换。', 3000);
+  } else {
+    say('这个文件夹里没有可用动作。', 3200);
+  }
+
+  scheduleRoaming(randomBetween(5000, 11000));
+});
+
 video.addEventListener('ended', () => {
-  if (temporaryActions.has(currentAction)) setAction(randomFrom(idleActions));
+  if (temporaryActions.has(currentAction)) setAction(randomFrom(getIdleActions()));
 });
 
 video.addEventListener('loadeddata', () => {
@@ -811,8 +857,11 @@ window.addEventListener('resize', () => {
 });
 
 async function boot() {
-  assetRootUrl = await window.desktopPet.getAssetRootUrl();
-  configureAssetFiles(await window.desktopPet.getAssetFiles());
+  const assets = await window.desktopPet.getAssets();
+  if (!applyAssetBundle(assets)) {
+    assetRootUrl = await window.desktopPet.getAssetRootUrl();
+    configureAssetFiles(await window.desktopPet.getAssetFiles());
+  }
   setAction('sit');
   setDirection(1);
   setMouseEventsIgnored(true);
