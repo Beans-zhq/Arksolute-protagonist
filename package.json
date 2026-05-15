@@ -6,7 +6,8 @@
   "private": true,
   "scripts": {
     "start": "node ./scripts/start-electron.js",
-    "dev": "node ./scripts/start-electron.js"
+    "dev": "node ./scripts/start-electron.js",
+    "package:win": "node ./scripts/package-windows.js"
   },
   "devDependencies": {
     "electron": "^32.3.3"
