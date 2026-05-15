@@ -196,8 +196,7 @@ function setDirection(direction) {
 }
 
 function say(text, duration = 5200) {
-  bubble.textContent = text;
-  updateBubbleWidth(text);
+  bubble.textContent = formatBubbleText(text);
   updateContentBounds();
   bubble.classList.add('is-visible');
   window.clearTimeout(bubbleTimer);
@@ -357,10 +356,28 @@ function randomBetween(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-function updateBubbleWidth(text) {
-  const length = Array.from(text).length;
-  const maxWidth = clamp(86 + length * 6, 150, 238);
-  document.documentElement.style.setProperty('--bubble-max-width', `${Math.round(maxWidth)}px`);
+function formatBubbleText(text) {
+  const chars = Array.from(text);
+  const maxLineChars = chars.length > 22 ? 16 : 18;
+  const lines = [];
+  let line = '';
+
+  for (const char of chars) {
+    line += char;
+    if (line.length >= maxLineChars && /[，。！？、,.!?]/.test(char)) {
+      lines.push(line);
+      line = '';
+      continue;
+    }
+
+    if (line.length >= maxLineChars + 2) {
+      lines.push(line);
+      line = '';
+    }
+  }
+
+  if (line) lines.push(line);
+  return lines.join('\n');
 }
 
 function scheduleContentBoundsMeasurement(delay = 180) {
@@ -460,10 +477,13 @@ function updateContentBounds() {
   const renderedVideo = getRenderedVideoRect(videoRect);
   const mappedBounds = mapVideoBoundsToWindow(renderedVideo);
 
-  updateBubbleAnchor(mappedBounds);
-
   window.desktopPet.setContentBounds(mappedBounds).then((nextState) => {
-    if (nextState) windowState = nextState;
+    if (nextState) {
+      windowState = nextState;
+      updateBubbleAnchor(mappedBounds);
+    } else {
+      updateBubbleAnchor(mappedBounds);
+    }
   });
 }
 
@@ -507,14 +527,24 @@ function mapVideoBoundsToWindow(renderedVideo) {
 }
 
 function updateBubbleAnchor(bounds) {
-  const shellRect = document.documentElement.getBoundingClientRect();
   const bubbleRect = bubble.getBoundingClientRect();
   const padding = 8;
-  const halfBubbleWidth = Math.max(80, bubbleRect.width / 2);
-  const minX = padding + halfBubbleWidth;
-  const maxX = shellRect.width - padding - halfBubbleWidth;
+  const halfBubbleWidth = Math.max(1, bubbleRect.width / 2);
   const visibleCenterX = bounds.left + (bounds.right - bounds.left) / 2;
-  const x = clamp(visibleCenterX, minX, Math.max(minX, maxX));
+  let x = visibleCenterX;
+
+  if (windowState?.bounds && windowState?.workArea) {
+    const screenX = windowState.bounds.x + visibleCenterX;
+    const minScreenX = windowState.workArea.x + padding + halfBubbleWidth;
+    const maxScreenX = windowState.workArea.x + windowState.workArea.width - padding - halfBubbleWidth;
+    const clampedScreenX = clamp(screenX, minScreenX, Math.max(minScreenX, maxScreenX));
+    x = clampedScreenX - windowState.bounds.x;
+  } else {
+    const minX = padding + halfBubbleWidth;
+    const maxX = window.innerWidth - padding - halfBubbleWidth;
+    x = clamp(visibleCenterX, minX, Math.max(minX, maxX));
+  }
+
   const y = Math.max(48, bounds.top - 2);
 
   document.documentElement.style.setProperty('--bubble-x', `${Math.round(x)}px`);
