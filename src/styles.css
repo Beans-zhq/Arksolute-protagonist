@@ -34,17 +34,53 @@ body {
   -webkit-app-region: no-drag;
 }
 
-.pet-viewport {
+.pet-stage {
   position: relative;
   width: var(--pet-crop-width, 220px);
   height: var(--pet-crop-height, 300px);
   max-width: calc(100vw - 8px);
   max-height: calc(100vh - 56px);
+  overflow: visible;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+}
+
+.sit-stool,
+.sleep-bed {
+  position: absolute;
+  left: 50%;
+  z-index: 0;
+  height: auto;
+  opacity: 0;
+  transform-origin: center bottom;
+  transition: opacity 420ms ease, transform 420ms ease;
+  pointer-events: none;
+  user-select: none;
+}
+
+.sit-stool {
+  bottom: calc(var(--pet-crop-height, 300px) * 0.012);
+  width: clamp(76px, calc(var(--pet-crop-width, 220px) * 0.48), 128px);
+  transform: translate(-50%, 0) scale(0.94);
+}
+
+.sleep-bed {
+  bottom: calc(var(--pet-crop-height, 300px) * -0.045);
+  width: clamp(154px, calc(var(--pet-crop-width, 220px) * 0.86), 224px);
+  transform: translate(-50%, 8px) scale(0.96);
+}
+
+.pet-viewport {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
   overflow: hidden;
   filter: drop-shadow(0 14px 16px rgb(0 0 0 / 0.3));
   pointer-events: auto;
-  transform: scaleX(var(--pet-facing, 1));
+  transform: translateY(var(--pet-lift, 0px)) scaleX(var(--pet-facing, 1));
   transform-origin: center bottom;
+  transition: transform 420ms ease;
   -webkit-app-region: no-drag;
 }
 
@@ -107,6 +143,24 @@ html[data-direction="left"] {
 
 html[data-direction="right"] {
   --pet-facing: 1;
+}
+
+html[data-action="sit"] .sit-stool {
+  opacity: 0.98;
+  transform: translate(-50%, 0) scale(1);
+}
+
+html[data-action="sit"] {
+  --pet-lift: calc(var(--pet-crop-height, 300px) * -0.13);
+}
+
+html[data-action="sleep"] .sleep-bed {
+  opacity: 0.98;
+  transform: translate(-50%, 0) scale(1);
+}
+
+html[data-action="sleep"] {
+  --pet-lift: calc(var(--pet-crop-height, 300px) * -0.34);
 }
 
 html.is-dragging .drag-region {

@@ -1,5 +1,7 @@
 const video = document.getElementById('petVideo');
 const petViewport = document.getElementById('petViewport');
+const stool = document.getElementById('sitStool');
+const bed = document.getElementById('sleepBed');
 const bubble = document.getElementById('bubble');
 const dragRegion = document.getElementById('dragRegion');
 
@@ -149,7 +151,7 @@ let dragMoved = false;
 let dragFrame = null;
 let lastPointerDown = null;
 let dragStartBounds = null;
-let lastDirection = 1;
+let lastDirection = 0;
 let clickTimer = null;
 let suppressNextClick = false;
 let assetMetrics = new Map();
@@ -291,6 +293,7 @@ async function setAction(action, options = {}) {
   currentAction = action;
   currentAssetFile = assetFile;
   currentMetrics = metrics;
+  document.documentElement.dataset.action = action;
   applyAssetMetrics(metrics);
 
   let nextAssetUrl;
@@ -762,13 +765,7 @@ function updateContentBounds() {
   if (!currentMetrics) return;
 
   const renderedPet = getRenderedPetRect();
-
-  const mappedBounds = {
-    left: renderedPet.x,
-    top: renderedPet.y,
-    right: renderedPet.x + renderedPet.width,
-    bottom: renderedPet.y + renderedPet.height
-  };
+  const mappedBounds = getRenderedContentBounds(renderedPet);
   const mappedAnchor = mapCropPointToWindow(renderedPet, currentMetrics.anchor);
 
   window.desktopPet.setContentBounds(mappedBounds).then((nextState) => {
@@ -790,6 +787,41 @@ function getRenderedPetRect() {
     width: rect.width,
     height: rect.height
   };
+}
+
+function getRenderedContentBounds(renderedPet) {
+  let bounds = {
+    left: renderedPet.x,
+    top: renderedPet.y,
+    right: renderedPet.x + renderedPet.width,
+    bottom: renderedPet.y + renderedPet.height
+  };
+
+  if (currentAction === 'sit' && stool) {
+    const stoolRect = stool.getBoundingClientRect();
+    if (stoolRect.width > 0 && stoolRect.height > 0) {
+      bounds = unionBoundsWith(bounds, {
+        left: stoolRect.left,
+        top: stoolRect.top,
+        right: stoolRect.right,
+        bottom: stoolRect.bottom
+      });
+    }
+  }
+
+  if (currentAction === 'sleep' && bed) {
+    const bedRect = bed.getBoundingClientRect();
+    if (bedRect.width > 0 && bedRect.height > 0) {
+      bounds = unionBoundsWith(bounds, {
+        left: bedRect.left,
+        top: bedRect.top,
+        right: bedRect.right,
+        bottom: bedRect.bottom
+      });
+    }
+  }
+
+  return bounds;
 }
 
 function mapCropPointToWindow(renderedPet, point) {

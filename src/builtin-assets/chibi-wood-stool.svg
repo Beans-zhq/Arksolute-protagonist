@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="160" viewBox="0 0 256 160" role="img" aria-label="Chibi wooden stool">
+  <defs>
+    <linearGradient id="seatTop" x1="54" y1="25" x2="203" y2="82" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffd384"/>
+      <stop offset="0.48" stop-color="#d68a3a"/>
+      <stop offset="1" stop-color="#8b4a21"/>
+    </linearGradient>
+    <linearGradient id="seatSide" x1="65" y1="66" x2="191" y2="111" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#c97932"/>
+      <stop offset="1" stop-color="#673618"/>
+    </linearGradient>
+    <linearGradient id="leg" x1="77" y1="78" x2="181" y2="148" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#bd7131"/>
+      <stop offset="1" stop-color="#5a2d15"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="6" stdDeviation="4" flood-color="#3a1d0d" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#shadow)">
+    <ellipse cx="128" cy="142" rx="82" ry="12" fill="#3c1e0e" opacity="0.22"/>
+
+    <path d="M75 76l-11 55c-2 8 3 15 11 16 8 1 15-4 17-12l15-54z" fill="url(#leg)" stroke="#4f2915" stroke-width="7" stroke-linejoin="round"/>
+    <path d="M181 76l11 55c2 8-3 15-11 16-8 1-15-4-17-12l-15-54z" fill="url(#leg)" stroke="#4f2915" stroke-width="7" stroke-linejoin="round"/>
+    <path d="M103 86h50l9 36c-21 7-47 7-68 0z" fill="#6f3819" opacity="0.7"/>
+
+    <path d="M60 57c15-22 121-24 137-1l12 25c8 18-11 32-81 32S39 99 47 81z" fill="url(#seatSide)" stroke="#4f2915" stroke-width="8" stroke-linejoin="round"/>
+    <path d="M54 52c8-30 139-31 148 0 8 27-15 38-74 38S46 79 54 52z" fill="url(#seatTop)" stroke="#5a2f18" stroke-width="8" stroke-linejoin="round"/>
+
+    <path d="M73 52c18-12 86-17 111-1" fill="none" stroke="#ffe0a1" stroke-width="7" stroke-linecap="round" opacity="0.6"/>
+    <path d="M80 66c24 10 73 13 101 0" fill="none" stroke="#8a451d" stroke-width="5" stroke-linecap="round" opacity="0.38"/>
+    <path d="M92 43c-8 11-9 25-1 36" fill="none" stroke="#a75d2a" stroke-width="4" stroke-linecap="round" opacity="0.45"/>
+    <path d="M128 38c-5 13-5 29 0 44" fill="none" stroke="#965122" stroke-width="4" stroke-linecap="round" opacity="0.4"/>
+    <path d="M164 43c8 11 8 25 0 36" fill="none" stroke="#754019" stroke-width="4" stroke-linecap="round" opacity="0.35"/>
+  </g>
+</svg>

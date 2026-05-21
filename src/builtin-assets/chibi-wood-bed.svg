@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180" role="img" aria-label="Chibi square wooden plank bed">
+  <defs>
+    <linearGradient id="top" x1="64" y1="46" x2="262" y2="114" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f1bd72"/>
+      <stop offset="0.48" stop-color="#b86e31"/>
+      <stop offset="1" stop-color="#6c391b"/>
+    </linearGradient>
+    <linearGradient id="side" x1="66" y1="110" x2="256" y2="148" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#a9612c"/>
+      <stop offset="1" stop-color="#4f2a16"/>
+    </linearGradient>
+    <linearGradient id="leg" x1="62" y1="112" x2="262" y2="166" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8d4e22"/>
+      <stop offset="1" stop-color="#3f2212"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="7" stdDeviation="4" flood-color="#1f1710" flood-opacity="0.24"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#shadow)">
+    <ellipse cx="160" cy="146" rx="96" ry="10" fill="#1f1710" opacity="0.18"/>
+
+    <path d="M62 77l47-25h151l-37 25z" fill="#ffd08a" stroke="#5a3018" stroke-width="7" stroke-linejoin="round"/>
+    <path d="M62 77h161v24H62z" fill="url(#top)" stroke="#5a3018" stroke-width="7" stroke-linejoin="round"/>
+    <path d="M223 77l37-25v24l-37 25z" fill="url(#side)" stroke="#4d2915" stroke-width="7" stroke-linejoin="round"/>
+    <path d="M62 101h161l37-25v18l-37 25H62z" fill="#75401f" stroke="#4d2915" stroke-width="7" stroke-linejoin="round"/>
+
+    <path d="M84 106l-4 35c-1 6 3 11 9 11s11-4 12-10l5-34z" fill="url(#leg)" stroke="#4d2915" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M218 106l4 35c1 6-3 11-9 11s-11-4-12-10l-5-34z" fill="url(#leg)" stroke="#4d2915" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M241 88l8 34c2 6-2 12-8 13-6 2-12-2-14-8l-8-32z" fill="#5d3219" stroke="#4d2915" stroke-width="5" stroke-linejoin="round"/>
+
+    <path d="M83 79h139" fill="none" stroke="#ffdb9b" stroke-width="5" stroke-linecap="round" opacity="0.5"/>
+    <path d="M82 99h137" fill="none" stroke="#6e3619" stroke-width="5" stroke-linecap="round" opacity="0.38"/>
+    <path d="M108 57v58" fill="none" stroke="#8f4d22" stroke-width="4" stroke-linecap="round" opacity="0.5"/>
+    <path d="M151 55v60" fill="none" stroke="#80451f" stroke-width="4" stroke-linecap="round" opacity="0.46"/>
+    <path d="M194 55v60" fill="none" stroke="#703b1b" stroke-width="4" stroke-linecap="round" opacity="0.42"/>
+    <path d="M72 103c42 7 105 7 145 0" fill="none" stroke="#c47a39" stroke-width="4" stroke-linecap="round" opacity="0.42"/>
+  </g>
+</svg>
