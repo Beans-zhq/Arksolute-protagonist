@@ -9,6 +9,15 @@ bin-release/
 .cache/
 node_modules/
 dist/
+src-tauri/target/
+
+# Local test captures
+background-now.png
+pet-current-*.png
+pet-screen-*.png
+pet-test-*.png
+pet-window-*.png
+window-diff*.png
 
 # Executables
 *.swf

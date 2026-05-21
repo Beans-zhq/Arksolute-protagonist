@@ -26,7 +26,7 @@ body {
 
 .drag-region {
   position: absolute;
-  inset: 74px 0 0;
+  inset: 52px 0 0;
   display: grid;
   place-items: end center;
   cursor: grab;
@@ -34,15 +34,28 @@ body {
   -webkit-app-region: no-drag;
 }
 
-.pet-video {
-  width: min(92vw, 292px);
-  height: min(80vh, 306px);
-  object-fit: contain;
+.pet-viewport {
+  position: relative;
+  width: var(--pet-crop-width, 220px);
+  height: var(--pet-crop-height, 300px);
+  max-width: calc(100vw - 8px);
+  max-height: calc(100vh - 56px);
+  overflow: hidden;
   filter: drop-shadow(0 14px 16px rgb(0 0 0 / 0.3));
   pointer-events: auto;
   transform: scaleX(var(--pet-facing, 1));
   transform-origin: center bottom;
   -webkit-app-region: no-drag;
+}
+
+.pet-video {
+  position: absolute;
+  left: calc(var(--pet-offset-x, 0px) * -1);
+  top: calc(var(--pet-offset-y, 0px) * -1);
+  width: var(--pet-full-width, 292px);
+  height: var(--pet-full-height, 306px);
+  object-fit: fill;
+  pointer-events: none;
 }
 
 .bubble {
@@ -65,7 +78,7 @@ body {
   overflow-wrap: break-word;
   box-shadow: 0 10px 24px rgb(0 0 0 / 0.24);
   opacity: 0;
-  transform: translate(-50%, calc(-100% - 18px));
+  transform: translate(-50%, calc(-100% - 2px));
   transition: opacity 160ms ease, transform 160ms ease;
   pointer-events: none;
 }
@@ -85,7 +98,7 @@ body {
 
 .bubble.is-visible {
   opacity: 1;
-  transform: translate(-50%, calc(-100% - 10px));
+  transform: translate(-50%, calc(-100% - 6px));
 }
 
 html[data-direction="left"] {

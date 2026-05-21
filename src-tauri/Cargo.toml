@@ -1,0 +1,19 @@
+[package]
+name = "absolute-protagonist"
+version = "0.1.0"
+description = "A transparent Windows desktop pet powered by local Absolute protagonist WebM assets."
+authors = ["Absolute protagonist"]
+edition = "2021"
+
+[lib]
+name = "absolute_protagonist_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = ["protocol-asset", "tray-icon", "image-ico", "image-png"] }
+rfd = "0.15"

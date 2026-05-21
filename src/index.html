@@ -3,16 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>维什戴尔桌面宠物</title>
+    <title>Absolute protagonist</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <main class="pet-shell" aria-label="维什戴尔桌面宠物">
+    <main class="pet-shell" aria-label="Absolute protagonist desktop pet">
       <section class="bubble" id="bubble" aria-live="polite"></section>
       <div class="drag-region" id="dragRegion">
-        <video id="petVideo" class="pet-video" autoplay muted loop playsinline></video>
+        <div id="petViewport" class="pet-viewport">
+          <video id="petVideo" class="pet-video" autoplay muted loop playsinline></video>
+        </div>
       </div>
     </main>
+    <script src="./tauri-adapter.js"></script>
     <script src="./renderer.js"></script>
   </body>
 </html>

@@ -1,4 +1,5 @@
 const video = document.getElementById('petVideo');
+const petViewport = document.getElementById('petViewport');
 const bubble = document.getElementById('bubble');
 const dragRegion = document.getElementById('dragRegion');
 
@@ -21,7 +22,7 @@ const defaultSpecialAssetFiles = ['维什戴尔-绝对主角-基建-Special-x1.w
 
 let assetFiles = { ...defaultAssetFiles };
 
-let assetRootUrl = '../assets/';
+let assetRootPath = null;
 let specialAssetFiles = [...defaultSpecialAssetFiles];
 
 const temporaryActions = new Set(['interact', 'special']);
@@ -151,20 +152,25 @@ let dragStartBounds = null;
 let lastDirection = 1;
 let clickTimer = null;
 let suppressNextClick = false;
-let measuredVideoBounds = null;
-let measureTimer = null;
-let measureSamplesLeft = 0;
-let hitMap = null;
+let assetMetrics = new Map();
+let currentMetrics = null;
 let mouseEventsIgnored = false;
+let mousePollTimer = null;
+let mousePollInFlight = false;
 let isRoaming = false;
 let currentAssetFile = assetFiles.sit;
+let assetUrls = new Map();
+let actionLoadToken = 0;
+let bundleLoadToken = 0;
 
 const clickThreshold = 5;
 const dragSampleMs = 16;
-const alphaThreshold = 8;
-const scanWidth = 180;
-const measureSampleCount = 8;
-const measureSampleInterval = 180;
+const visibleAlphaThreshold = 24;
+const measurementSampleCount = 5;
+const measurementCropPadding = 3;
+const measurementSeekTimeoutMs = 900;
+const mousePollMs = 40;
+const bubbleGap = 2;
 
 function configureAssetFiles(files) {
   if (!Array.isArray(files) || files.length === 0) return false;
@@ -205,8 +211,35 @@ function getAssetFileForAction(action) {
   return assetFiles[action];
 }
 
-function getAssetUrl(assetFile) {
-  return new URL(encodeURIComponent(assetFile), assetRootUrl).href;
+async function createAssetUrl(assetFile) {
+  if (window.desktopPet?.readAssetFile) {
+    const bytes = await window.desktopPet.readAssetFile(assetFile);
+    const blob = new Blob([new Uint8Array(bytes)], { type: 'video/webm' });
+    return URL.createObjectURL(blob);
+  }
+
+  if (!assetRootPath || !window.desktopPet?.convertAssetFileSrc) {
+    return `../assets/${encodeURIComponent(assetFile)}`;
+  }
+
+  const separator = assetRootPath.endsWith('\\') || assetRootPath.endsWith('/') ? '' : '\\';
+  return window.desktopPet.convertAssetFileSrc(`${assetRootPath}${separator}${assetFile}`);
+}
+
+async function getAssetUrl(assetFile) {
+  if (assetUrls.has(assetFile)) return assetUrls.get(assetFile);
+
+  const assetUrl = await createAssetUrl(assetFile);
+  assetUrls.set(assetFile, assetUrl);
+  return assetUrl;
+}
+
+function revokeAssetUrls() {
+  for (const assetUrl of assetUrls.values()) {
+    if (assetUrl.startsWith('blob:')) URL.revokeObjectURL(assetUrl);
+  }
+
+  assetUrls = new Map();
 }
 
 function getFallbackAction() {
@@ -221,35 +254,58 @@ function getIdleActions() {
   return stableActions.length > 0 ? stableActions : Object.keys(assetFiles);
 }
 
-function applyAssetBundle(bundle) {
+async function applyAssetBundle(bundle) {
   if (!bundle || !configureAssetFiles(bundle.files)) return false;
 
-  assetRootUrl = bundle.rootUrl;
+  const loadToken = bundleLoadToken + 1;
+  bundleLoadToken = loadToken;
+  assetRootPath = bundle.rootPath;
   currentAssetFile = null;
-  measuredVideoBounds = null;
-  hitMap = null;
+  currentMetrics = null;
+  assetMetrics = new Map();
+  revokeAssetUrls();
+  setMouseEventsIgnored(true);
 
-  const nextAction = assetFiles[currentAction] || getFallbackAction();
+  await preloadAssetMetrics(bundle.files, loadToken);
+  if (loadToken !== bundleLoadToken) return false;
+
+  const nextAction = assetFiles[currentAction] ? currentAction : getFallbackAction();
   if (nextAction) {
-    setAction(nextAction, { restart: true });
+    await setAction(nextAction, { restart: true });
   }
 
   return true;
 }
 
-function setAction(action, options = {}) {
+async function setAction(action, options = {}) {
   const assetFile = getAssetFileForAction(action);
   if (!assetFile) return;
+
+  const loadToken = actionLoadToken + 1;
+  actionLoadToken = loadToken;
+  const metrics = assetMetrics.get(assetFile);
+  if (!metrics) return;
 
   const sameAction = currentAction === action;
   const sameAsset = currentAssetFile === assetFile;
   currentAction = action;
   currentAssetFile = assetFile;
-  video.src = getAssetUrl(assetFile);
+  currentMetrics = metrics;
+  applyAssetMetrics(metrics);
+
+  let nextAssetUrl;
+  try {
+    nextAssetUrl = await getAssetUrl(assetFile);
+  } catch {
+    return;
+  }
+
+  if (loadToken !== actionLoadToken) {
+    return;
+  }
+
+  video.src = nextAssetUrl;
   video.loop = !temporaryActions.has(action);
-  measuredVideoBounds = null;
-  hitMap = null;
-  measureSamplesLeft = measureSampleCount;
 
   if (sameAction && (options.restart || (action === 'special' && sameAsset))) {
     try {
@@ -261,7 +317,14 @@ function setAction(action, options = {}) {
     video.load();
   }
 
-  video.play().catch(() => {});
+  try {
+    await video.play();
+  } catch {
+    // Autoplay can be delayed until the element is ready.
+  }
+
+  updateContentBounds();
+  refreshMouseHitTestFromCursor();
 
   window.clearTimeout(temporaryTimer);
   if (temporaryActions.has(action)) {
@@ -466,88 +529,192 @@ function formatBubbleText(text) {
   return lines.join('\n');
 }
 
-function scheduleContentBoundsMeasurement(delay = 180) {
-  window.clearTimeout(measureTimer);
-  measureTimer = window.setTimeout(() => {
-    measureVisibleVideoBounds();
-  }, delay);
-}
+async function preloadAssetMetrics(files, loadToken) {
+  const webmFiles = files.filter((file) => typeof file === 'string' && file.toLowerCase().endsWith('.webm'));
 
-function measureVisibleVideoBounds() {
-  if (!video.videoWidth || !video.videoHeight) {
-    scheduleContentBoundsMeasurement(140);
-    return;
-  }
+  for (const file of webmFiles) {
+    if (loadToken !== bundleLoadToken) return;
+    if (assetMetrics.has(file)) continue;
 
-  const scale = scanWidth / video.videoWidth;
-  const canvas = document.createElement('canvas');
-  canvas.width = scanWidth;
-  canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
-
-  const context = canvas.getContext('2d', { willReadFrequently: true });
-  if (!context) return;
-
-  context.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-  const frame = context.getImageData(0, 0, canvas.width, canvas.height);
-  const scan = scanVisiblePixels(frame.data, canvas.width, canvas.height);
-
-  if (!scan.bounds) {
-    scheduleContentBoundsMeasurement(220);
-    return;
-  }
-
-  const nextBounds = {
-    left: scan.bounds.left / scale,
-    top: scan.bounds.top / scale,
-    right: (scan.bounds.right + 1) / scale,
-    bottom: (scan.bounds.bottom + 1) / scale
-  };
-
-  measuredVideoBounds = measuredVideoBounds ? unionVideoBounds(measuredVideoBounds, nextBounds) : nextBounds;
-  hitMap = scan.hitMap;
-
-  updateContentBounds();
-
-  if (measureSamplesLeft > 0) {
-    measureSamplesLeft -= 1;
-    scheduleContentBoundsMeasurement(measureSampleInterval);
-  }
-}
-
-function scanVisiblePixels(data, width, height) {
-  let left = width;
-  let top = height;
-  let right = -1;
-  let bottom = -1;
-  const pixels = new Uint8Array(width * height);
-
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const alpha = data[(y * width + x) * 4 + 3];
-      if (alpha <= alphaThreshold) continue;
-
-      pixels[y * width + x] = 1;
-      if (x < left) left = x;
-      if (x > right) right = x;
-      if (y < top) top = y;
-      if (y > bottom) bottom = y;
+    try {
+      const metrics = await measureAssetMetrics(file);
+      if (loadToken === bundleLoadToken) assetMetrics.set(file, metrics);
+    } catch {
+      // Invalid or unreadable assets are ignored; actions without metrics are not selected.
     }
+
+    await yieldToBrowser();
+  }
+}
+
+async function measureAssetMetrics(assetFile) {
+  const assetUrl = await getAssetUrl(assetFile);
+  const probe = document.createElement('video');
+  probe.muted = true;
+  probe.preload = 'auto';
+  probe.playsInline = true;
+  probe.src = assetUrl;
+
+  await waitForVideoMetadata(probe);
+
+  const width = probe.videoWidth;
+  const height = probe.videoHeight;
+  if (!width || !height) throw new Error('Video dimensions are unavailable.');
+
+  const duration = Number.isFinite(probe.duration) && probe.duration > 0 ? probe.duration : 0;
+  const sampleTimes = getMeasurementSampleTimes(duration);
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d', { willReadFrequently: true });
+  if (!context) throw new Error('Canvas is unavailable.');
+
+  let unionBounds = null;
+
+  for (const time of sampleTimes) {
+    await seekVideoFrame(probe, time);
+    context.clearRect(0, 0, width, height);
+    context.drawImage(probe, 0, 0, width, height);
+    const frame = context.getImageData(0, 0, width, height);
+    const bounds = scanVisibleBounds(frame.data, width, height);
+    if (bounds) unionBounds = unionBounds ? unionBoundsWith(unionBounds, bounds) : bounds;
+    await yieldToBrowser();
   }
 
-  const bounds = right < left || bottom < top ? null : { left, top, right, bottom };
+  if (!unionBounds) {
+    unionBounds = { left: 0, top: 0, right: width - 1, bottom: height - 1 };
+  }
+
+  unionBounds = expandBounds(unionBounds, width, height, measurementCropPadding);
+
+  const crop = {
+    left: unionBounds.left,
+    top: unionBounds.top,
+    right: unionBounds.right + 1,
+    bottom: unionBounds.bottom + 1
+  };
+  const cropWidth = Math.max(1, crop.right - crop.left);
+  const cropHeight = Math.max(1, crop.bottom - crop.top);
 
   return {
-    bounds,
-    hitMap: {
-      width,
-      height,
-      pixels
+    file: assetFile,
+    videoWidth: width,
+    videoHeight: height,
+    crop,
+    cropWidth,
+    cropHeight,
+    anchor: {
+      x: cropWidth / 2,
+      y: 0
     }
   };
 }
 
-function unionVideoBounds(current, next) {
+function waitForVideoMetadata(probe) {
+  if (probe.readyState >= 1 && probe.videoWidth && probe.videoHeight) {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      probe.removeEventListener('loadedmetadata', onLoaded);
+      probe.removeEventListener('error', onError);
+    };
+    const onLoaded = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error('Video metadata failed to load.'));
+    };
+
+    probe.addEventListener('loadedmetadata', onLoaded, { once: true });
+    probe.addEventListener('error', onError, { once: true });
+    probe.load();
+  });
+}
+
+function seekVideoFrame(probe, time) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      probe.removeEventListener('seeked', done);
+      resolve();
+    };
+    const timer = window.setTimeout(done, measurementSeekTimeoutMs);
+
+    probe.addEventListener('seeked', done, { once: true });
+    try {
+      probe.currentTime = time;
+    } catch {
+      done();
+    }
+  });
+}
+
+function getMeasurementSampleTimes(duration) {
+  if (!duration) return [0];
+
+  const usableEnd = Math.max(0, duration - 0.05);
+  if (measurementSampleCount <= 1) return [Math.min(0.05, usableEnd)];
+
+  const times = [];
+  for (let index = 0; index < measurementSampleCount; index += 1) {
+    const ratio = index / (measurementSampleCount - 1);
+    times.push(Math.min(usableEnd, Math.max(0, ratio * usableEnd)));
+  }
+  return times;
+}
+
+function scanVisibleBounds(data, width, height) {
+  const left = findVisibleColumn(data, width, height, 0, width, 1);
+  if (left < 0) return null;
+
+  const right = findVisibleColumn(data, width, height, width - 1, -1, -1);
+  const top = findVisibleRow(data, width, left, right, 0, height, 1);
+  const bottom = findVisibleRow(data, width, left, right, height - 1, -1, -1);
+
+  return { left, top, right, bottom };
+}
+
+function findVisibleColumn(data, width, height, start, end, step) {
+  for (let x = start; x !== end; x += step) {
+    for (let y = 0; y < height; y += 1) {
+      if (getAlpha(data, width, x, y) > visibleAlphaThreshold) return x;
+    }
+  }
+
+  return -1;
+}
+
+function findVisibleRow(data, width, left, right, start, end, step) {
+  for (let y = start; y !== end; y += step) {
+    for (let x = left; x <= right; x += 1) {
+      if (getAlpha(data, width, x, y) > visibleAlphaThreshold) return y;
+    }
+  }
+
+  return -1;
+}
+
+function getAlpha(data, width, x, y) {
+  return data[(y * width + x) * 4 + 3];
+}
+
+function expandBounds(bounds, width, height, padding) {
+  return {
+    left: clamp(bounds.left - padding, 0, width - 1),
+    top: clamp(bounds.top - padding, 0, height - 1),
+    right: clamp(bounds.right + padding, 0, width - 1),
+    bottom: clamp(bounds.bottom + padding, 0, height - 1)
+  };
+}
+
+function unionBoundsWith(current, next) {
   return {
     left: Math.min(current.left, next.left),
     top: Math.min(current.top, next.top),
@@ -556,71 +723,96 @@ function unionVideoBounds(current, next) {
   };
 }
 
-function updateContentBounds() {
-  if (!measuredVideoBounds) return;
+function applyAssetMetrics(metrics) {
+  const scale = getFullVideoDisplayScale(metrics);
+  const fullWidth = Math.max(1, Math.round(metrics.videoWidth * scale));
+  const fullHeight = Math.max(1, Math.round(metrics.videoHeight * scale));
+  const cropWidth = Math.max(1, Math.round(metrics.cropWidth * scale));
+  const cropHeight = Math.max(1, Math.round(metrics.cropHeight * scale));
+  const offsetX = Math.round(metrics.crop.left * scale);
+  const offsetY = Math.round(metrics.crop.top * scale);
 
-  const videoRect = video.getBoundingClientRect();
-  const renderedVideo = getRenderedVideoRect(videoRect);
-  const mappedBounds = mapVideoBoundsToWindow(renderedVideo);
+  document.documentElement.style.setProperty('--pet-full-width', `${fullWidth}px`);
+  document.documentElement.style.setProperty('--pet-full-height', `${fullHeight}px`);
+  document.documentElement.style.setProperty('--pet-crop-width', `${cropWidth}px`);
+  document.documentElement.style.setProperty('--pet-crop-height', `${cropHeight}px`);
+  document.documentElement.style.setProperty('--pet-offset-x', `${offsetX}px`);
+  document.documentElement.style.setProperty('--pet-offset-y', `${offsetY}px`);
+}
+
+function yieldToBrowser() {
+  return new Promise((resolve) => window.requestAnimationFrame(resolve));
+}
+
+function getFullVideoDisplayScale(metrics) {
+  const dragRect = dragRegion.getBoundingClientRect();
+  const maxWidth = Math.max(1, Math.min(window.innerWidth * 0.92, 292, dragRect.width - 8));
+  const maxHeight = Math.max(1, Math.min(window.innerHeight * 0.88, 344, dragRect.height - 4));
+  const videoRatio = metrics.videoWidth / metrics.videoHeight;
+  const targetRatio = maxWidth / maxHeight;
+
+  if (targetRatio > videoRatio) {
+    return maxHeight / metrics.videoHeight;
+  }
+
+  return maxWidth / metrics.videoWidth;
+}
+
+function updateContentBounds() {
+  if (!currentMetrics) return;
+
+  const renderedPet = getRenderedPetRect();
+
+  const mappedBounds = {
+    left: renderedPet.x,
+    top: renderedPet.y,
+    right: renderedPet.x + renderedPet.width,
+    bottom: renderedPet.y + renderedPet.height
+  };
+  const mappedAnchor = mapCropPointToWindow(renderedPet, currentMetrics.anchor);
 
   window.desktopPet.setContentBounds(mappedBounds).then((nextState) => {
     if (nextState) {
       windowState = nextState;
-      updateBubbleAnchor(mappedBounds);
+      updateBubbleAnchor(mappedBounds, mappedAnchor);
     } else {
-      updateBubbleAnchor(mappedBounds);
+      updateBubbleAnchor(mappedBounds, mappedAnchor);
     }
   });
 }
 
-function getRenderedVideoRect(videoRect) {
-  const videoRatio = video.videoWidth / video.videoHeight;
-  const elementRatio = videoRect.width / videoRect.height;
+function getRenderedPetRect() {
+  const rect = petViewport.getBoundingClientRect();
 
-  if (elementRatio > videoRatio) {
-    const width = videoRect.height * videoRatio;
-    return {
-      x: videoRect.left + (videoRect.width - width) / 2,
-      y: videoRect.top,
-      width,
-      height: videoRect.height
-    };
-  }
-
-  const height = videoRect.width / videoRatio;
   return {
-    x: videoRect.left,
-    y: videoRect.top + (videoRect.height - height) / 2,
-    width: videoRect.width,
-    height
+    x: rect.left,
+    y: rect.top,
+    width: rect.width,
+    height: rect.height
   };
 }
 
-function mapVideoBoundsToWindow(renderedVideo) {
-  const scaleX = renderedVideo.width / video.videoWidth;
-  const scaleY = renderedVideo.height / video.videoHeight;
-  const rawLeft = measuredVideoBounds.left * scaleX;
-  const rawRight = measuredVideoBounds.right * scaleX;
-  const leftOffset = lastDirection < 0 ? renderedVideo.width - rawRight : rawLeft;
-  const rightOffset = lastDirection < 0 ? renderedVideo.width - rawLeft : rawRight;
+function mapCropPointToWindow(renderedPet, point) {
+  const scaleX = renderedPet.width / currentMetrics.cropWidth;
+  const scaleY = renderedPet.height / currentMetrics.cropHeight;
+  const rawX = point.x * scaleX;
+  const xOffset = lastDirection < 0 ? renderedPet.width - rawX : rawX;
 
   return {
-    left: renderedVideo.x + leftOffset,
-    top: renderedVideo.y + measuredVideoBounds.top * scaleY,
-    right: renderedVideo.x + rightOffset,
-    bottom: renderedVideo.y + measuredVideoBounds.bottom * scaleY
+    x: renderedPet.x + xOffset,
+    y: renderedPet.y + point.y * scaleY
   };
 }
 
-function updateBubbleAnchor(bounds) {
+function updateBubbleAnchor(bounds, anchor = null) {
   const bubbleRect = bubble.getBoundingClientRect();
   const padding = 8;
   const halfBubbleWidth = Math.max(1, bubbleRect.width / 2);
   const visibleCenterX = bounds.left + (bounds.right - bounds.left) / 2;
-  let x = visibleCenterX;
+  let x = anchor?.x ?? visibleCenterX;
 
   if (windowState?.bounds && windowState?.workArea) {
-    const screenX = windowState.bounds.x + visibleCenterX;
+    const screenX = windowState.bounds.x + x;
     const minScreenX = windowState.workArea.x + padding + halfBubbleWidth;
     const maxScreenX = windowState.workArea.x + windowState.workArea.width - padding - halfBubbleWidth;
     const clampedScreenX = clamp(screenX, minScreenX, Math.max(minScreenX, maxScreenX));
@@ -628,48 +820,69 @@ function updateBubbleAnchor(bounds) {
   } else {
     const minX = padding + halfBubbleWidth;
     const maxX = window.innerWidth - padding - halfBubbleWidth;
-    x = clamp(visibleCenterX, minX, Math.max(minX, maxX));
+    x = clamp(x, minX, Math.max(minX, maxX));
   }
 
-  const y = Math.max(48, bounds.top - 2);
+  const anchorY = anchor?.y ?? bounds.top;
+  const minY = bubbleRect.height + padding;
+  const maxY = Math.max(minY, window.innerHeight - padding);
+  const y = clamp(anchorY - bubbleGap, minY, maxY);
 
   document.documentElement.style.setProperty('--bubble-x', `${Math.round(x)}px`);
   document.documentElement.style.setProperty('--bubble-y', `${Math.round(y)}px`);
 }
 
 function setMouseEventsIgnored(ignored) {
+  startMouseHitPolling();
+
   if (mouseEventsIgnored === ignored) return;
 
   mouseEventsIgnored = ignored;
-  window.desktopPet.setMouseEventsIgnored(ignored);
+  window.desktopPet.setMouseEventsIgnored(ignored).catch(() => {});
+}
+
+function startMouseHitPolling() {
+  if (mousePollTimer || !window.desktopPet?.getCursorClientPoint) return;
+
+  mousePollTimer = window.setInterval(async () => {
+    if (isDragging || mousePollInFlight) return;
+
+    mousePollInFlight = true;
+    try {
+      await refreshMouseHitTestFromCursor();
+    } finally {
+      mousePollInFlight = false;
+    }
+  }, mousePollMs);
+}
+
+function stopMouseHitPolling() {
+  window.clearInterval(mousePollTimer);
+  mousePollTimer = null;
 }
 
 function isVisiblePixelAtPoint(point) {
-  if (!hitMap || !video.videoWidth || !video.videoHeight) return true;
+  if (!currentMetrics) return false;
 
-  const videoRect = video.getBoundingClientRect();
-  const renderedVideo = getRenderedVideoRect(videoRect);
+  const renderedPet = getRenderedPetRect();
 
   if (
-    point.x < renderedVideo.x ||
-    point.x >= renderedVideo.x + renderedVideo.width ||
-    point.y < renderedVideo.y ||
-    point.y >= renderedVideo.y + renderedVideo.height
+    point.x < renderedPet.x ||
+    point.x >= renderedPet.x + renderedPet.width ||
+    point.y < renderedPet.y ||
+    point.y >= renderedPet.y + renderedPet.height
   ) {
     return false;
   }
 
-  let videoX = ((point.x - renderedVideo.x) / renderedVideo.width) * hitMap.width;
-  const videoY = ((point.y - renderedVideo.y) / renderedVideo.height) * hitMap.height;
+  return true;
+}
 
-  if (lastDirection < 0) {
-    videoX = hitMap.width - videoX;
-  }
+async function refreshMouseHitTestFromCursor() {
+  if (isDragging || !window.desktopPet?.getCursorClientPoint) return;
 
-  const x = clamp(Math.floor(videoX), 0, hitMap.width - 1);
-  const y = clamp(Math.floor(videoY), 0, hitMap.height - 1);
-
-  return hitMap.pixels[y * hitMap.width + x] === 1;
+  const point = await window.desktopPet.getCursorClientPoint();
+  setMouseEventsIgnored(!isVisiblePixelAtPoint(point));
 }
 
 function syncMouseHitTest(event) {
@@ -831,40 +1044,31 @@ window.desktopPet.onAssetsChanged((assets) => {
   stopRoaming();
   window.clearTimeout(roamTimer);
 
-  if (applyAssetBundle(assets)) {
-    say('动作文件夹已切换。', 3000);
-  } else {
-    say('这个文件夹里没有可用动作。', 3200);
-  }
+  applyAssetBundle(assets).then((applied) => {
+    if (applied) {
+      say('动作文件夹已切换。', 3000);
+    } else {
+      say('这个文件夹里没有可用动作。', 3200);
+    }
 
-  scheduleRoaming(randomBetween(5000, 11000));
+    scheduleRoaming(randomBetween(5000, 11000));
+  });
 });
 
 video.addEventListener('ended', () => {
   if (temporaryActions.has(currentAction)) setAction(randomFrom(getIdleActions()));
 });
 
-video.addEventListener('loadeddata', () => {
-  scheduleContentBoundsMeasurement(120);
-});
-
-video.addEventListener('playing', () => {
-  scheduleContentBoundsMeasurement(180);
-});
-
 window.addEventListener('resize', () => {
+  if (currentMetrics) applyAssetMetrics(currentMetrics);
   updateContentBounds();
 });
 
 async function boot() {
   const assets = await window.desktopPet.getAssets();
-  if (!applyAssetBundle(assets)) {
-    assetRootUrl = await window.desktopPet.getAssetRootUrl();
-    configureAssetFiles(await window.desktopPet.getAssetFiles());
-  }
-  setAction('sit');
   setDirection(1);
   setMouseEventsIgnored(true);
+  await applyAssetBundle(assets);
   window.setTimeout(() => say('博士，我在桌面待命。', 4200), 800);
   scheduleIdleAction();
   scheduleTalking();

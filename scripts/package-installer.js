@@ -4,73 +4,56 @@ const { spawnSync } = require('node:child_process');
 
 const rootDir = path.resolve(__dirname, '..');
 const distDir = path.join(rootDir, 'dist');
+const bundleDir = path.join(rootDir, 'src-tauri', 'target', 'release', 'bundle', 'nsis');
 const installerName = 'Absolute protagonist Setup.exe';
 
 function main() {
-  cleanOutput();
-
-  const result = spawnSync(
-    process.execPath,
-    [
-      path.join(rootDir, 'node_modules', 'electron-builder', 'cli.js'),
-      '--win',
-      'nsis',
-      '--x64',
-      '--config',
-      'electron-builder.json'
-    ],
-    {
-      cwd: rootDir,
-      stdio: 'inherit',
-      windowsHide: true
-    }
-  );
-
-  if (result.status !== 0) {
-    throw new Error('Failed to build exe installer.');
-  }
-
-  const installerPath = path.join(distDir, installerName);
-  if (!fs.existsSync(installerPath)) {
-    throw new Error(`Installer was not created: ${installerPath}`);
-  }
-
-  removeIfExists(path.join(distDir, 'win-unpacked'));
-  removeMatchingDistFiles((name) => name.endsWith('.blockmap') || name.endsWith('.yml'));
-
-  console.log(`Packaged installer: ${installerPath}`);
-}
-
-function cleanOutput() {
+  fs.rmSync(distDir, { recursive: true, force: true });
   fs.mkdirSync(distDir, { recursive: true });
 
-  removeIfExists(path.join(distDir, 'Absolute protagonist'));
-  removeIfExists(path.join(distDir, 'win-unpacked'));
-  removeIfExists(path.join(distDir, '.installer-build'));
-  removeIfExists(path.join(distDir, '.launcher-build'));
-
-  for (const file of [
-    installerName,
-    'Absolute protagonist-windows.zip',
-    'Absolute protagonist-0.1.0.msi',
-    '维什戴尔桌面宠物-windows.zip'
-  ]) {
-    removeIfExists(path.join(distDir, file));
+  const env = { ...process.env };
+  const cargoBinDir = path.join(env.USERPROFILE || '', '.cargo', 'bin');
+  if (cargoBinDir) {
+    env.PATH = `${cargoBinDir}${path.delimiter}${env.PATH || ''}`;
   }
 
-  removeMatchingDistFiles((name) => name.endsWith('.blockmap') || name.endsWith('.yml'));
-}
+  const tauriCli = path.join(rootDir, 'node_modules', '@tauri-apps', 'cli', 'tauri.js');
+  const result = spawnSync(process.execPath, [tauriCli, 'build', '--bundles', 'nsis'], {
+    cwd: rootDir,
+    env,
+    stdio: 'inherit',
+    windowsHide: true
+  });
 
-function removeMatchingDistFiles(predicate) {
-  for (const entry of fs.readdirSync(distDir, { withFileTypes: true })) {
-    if (entry.isFile() && predicate(entry.name)) {
-      removeIfExists(path.join(distDir, entry.name));
-    }
+  if (result.status !== 0) {
+    throw new Error('Failed to build Tauri exe installer.');
   }
+
+  const sourceInstaller = findLatestInstaller();
+  const outputInstaller = path.join(distDir, installerName);
+  fs.copyFileSync(sourceInstaller, outputInstaller);
+
+  console.log(`Packaged installer: ${outputInstaller}`);
 }
 
-function removeIfExists(targetPath) {
-  fs.rmSync(targetPath, { recursive: true, force: true });
+function findLatestInstaller() {
+  const installers = fs
+    .readdirSync(bundleDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.exe'))
+    .map((entry) => {
+      const filePath = path.join(bundleDir, entry.name);
+      return {
+        filePath,
+        mtimeMs: fs.statSync(filePath).mtimeMs
+      };
+    })
+    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+  if (installers.length === 0) {
+    throw new Error(`Installer was not created in ${bundleDir}.`);
+  }
+
+  return installers[0].filePath;
 }
 
 main();
