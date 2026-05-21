@@ -1102,8 +1102,10 @@ async function boot() {
   const assets = await window.desktopPet.getAssets();
   setDirection(1);
   setMouseEventsIgnored(true);
-  await applyAssetBundle(assets);
-  window.setTimeout(() => say('博士，我在桌面待命。', 4200), 800);
+  const applied = await applyAssetBundle(assets);
+  if (applied && currentMetrics) {
+    window.setTimeout(() => say('博士，我在桌面待命。', 4200), 800);
+  }
   scheduleIdleAction();
   scheduleTalking();
   scheduleRoaming(3200);
