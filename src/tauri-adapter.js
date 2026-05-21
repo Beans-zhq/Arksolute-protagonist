@@ -30,8 +30,9 @@
       currentWindow.outerSize(),
       currentWindow.scaleFactor()
     ]);
-    const monitor = await monitorFromWindowBounds(position, size);
     const cssSize = physicalSizeToCss(size, scaleFactor);
+    const effectiveBounds = getEffectiveContentBounds(cssSize);
+    const monitor = await monitorFromContentBounds(position, effectiveBounds, scaleFactor);
 
     return {
       bounds: {
@@ -40,8 +41,9 @@
         width: cssSize.width,
         height: cssSize.height
       },
+      scaleFactor,
       workArea: monitorToWorkArea(monitor, size),
-      contentBounds: getEffectiveContentBounds(cssSize)
+      contentBounds: effectiveBounds
     };
   }
 
@@ -59,6 +61,15 @@
     const monitor = (await monitorFromPoint(cursor.x, cursor.y)) || (await primaryMonitor());
 
     return { cursor, monitor };
+  }
+
+  async function monitorFromContentBounds(position, bounds, scaleFactor) {
+    const center = {
+      x: position.x + ((bounds.left + bounds.right) / 2) * scaleFactor,
+      y: position.y + ((bounds.top + bounds.bottom) / 2) * scaleFactor
+    };
+
+    return (await monitorFromPoint(center.x, center.y)) || (await primaryMonitor());
   }
 
   function monitorToWorkArea(monitor, fallbackSize) {
@@ -112,13 +123,14 @@
       currentWindow.outerSize(),
       currentWindow.scaleFactor()
     ]);
-    const monitor = await monitorFromWindowBounds(
-      { x: position.x, y: position.y },
-      size
-    );
-    const workArea = monitorToWorkArea(monitor, size);
     const cssSize = physicalSizeToCss(size, scaleFactor);
     const effectiveBounds = getEffectiveContentBounds(cssSize);
+    const monitor = await monitorFromContentBounds(
+      { x: position.x, y: position.y },
+      effectiveBounds,
+      scaleFactor
+    );
+    const workArea = monitorToWorkArea(monitor, size);
     const physicalBounds = scaleBounds(effectiveBounds, scaleFactor);
     const nextPosition = clampWindowPosition(position.x, position.y, workArea, physicalBounds);
 
@@ -131,6 +143,7 @@
         width: cssSize.width,
         height: cssSize.height
       },
+      scaleFactor,
       workArea,
       contentBounds: effectiveBounds
     };
@@ -174,6 +187,7 @@
         width: cssSize.width,
         height: cssSize.height
       },
+      scaleFactor,
       workArea,
       contentBounds: effectiveBounds
     };
@@ -206,9 +220,9 @@
     const cssSize = physicalSizeToCss(size, scaleFactor);
     contentBounds = normalizeContentBounds(bounds, cssSize);
 
-    const monitor = await monitorFromWindowBounds(position, size);
-    const workArea = monitorToWorkArea(monitor, size);
     const effectiveBounds = getEffectiveContentBounds(cssSize, contentBounds);
+    const monitor = await monitorFromContentBounds(position, effectiveBounds, scaleFactor);
+    const workArea = monitorToWorkArea(monitor, size);
     const physicalBounds = scaleBounds(effectiveBounds, scaleFactor);
     const nextPosition = clampWindowPosition(position.x, position.y, workArea, physicalBounds);
 
@@ -223,6 +237,7 @@
         width: cssSize.width,
         height: cssSize.height
       },
+      scaleFactor,
       workArea,
       contentBounds: effectiveBounds
     };
@@ -230,16 +245,18 @@
 
   function getWindowStateFromParts(position, size, scaleFactor) {
     const cssSize = physicalSizeToCss(size, scaleFactor);
+    const effectiveBounds = getEffectiveContentBounds(cssSize);
 
-    return monitorFromWindowBounds(position, size).then((monitor) => ({
+    return monitorFromContentBounds(position, effectiveBounds, scaleFactor).then((monitor) => ({
       bounds: {
         x: position.x,
         y: position.y,
         width: cssSize.width,
         height: cssSize.height
       },
+      scaleFactor,
       workArea: monitorToWorkArea(monitor, size),
-      contentBounds: getEffectiveContentBounds(cssSize)
+      contentBounds: effectiveBounds
     }));
   }
 

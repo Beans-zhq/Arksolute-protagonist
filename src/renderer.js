@@ -844,11 +844,13 @@ function updateBubbleAnchor(bounds, anchor = null) {
   let x = anchor?.x ?? visibleCenterX;
 
   if (windowState?.bounds && windowState?.workArea) {
-    const screenX = windowState.bounds.x + x;
-    const minScreenX = windowState.workArea.x + padding + halfBubbleWidth;
-    const maxScreenX = windowState.workArea.x + windowState.workArea.width - padding - halfBubbleWidth;
+    const scaleFactor = windowState.scaleFactor || 1;
+    const screenX = windowState.bounds.x + x * scaleFactor;
+    const minScreenX = windowState.workArea.x + (padding + halfBubbleWidth) * scaleFactor;
+    const maxScreenX =
+      windowState.workArea.x + windowState.workArea.width - (padding + halfBubbleWidth) * scaleFactor;
     const clampedScreenX = clamp(screenX, minScreenX, Math.max(minScreenX, maxScreenX));
-    x = clampedScreenX - windowState.bounds.x;
+    x = (clampedScreenX - windowState.bounds.x) / scaleFactor;
   } else {
     const minX = padding + halfBubbleWidth;
     const maxX = window.innerWidth - padding - halfBubbleWidth;
