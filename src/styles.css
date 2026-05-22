@@ -59,14 +59,22 @@ body {
 }
 
 .sit-stool {
-  bottom: calc(var(--pet-crop-height, 300px) * 0.012);
-  width: clamp(76px, calc(var(--pet-crop-width, 220px) * 0.48), 128px);
+  bottom: calc(var(--pet-crop-height, 300px) * var(--sit-bottom-ratio, 0.012));
+  width: clamp(
+    var(--sit-min-width, 76px),
+    calc(var(--pet-crop-width, 220px) * var(--sit-width-ratio, 0.48)),
+    var(--sit-max-width, 128px)
+  );
   transform: translate(-50%, 0) scale(0.94);
 }
 
 .sleep-bed {
-  bottom: calc(var(--pet-crop-height, 300px) * -0.045);
-  width: clamp(154px, calc(var(--pet-crop-width, 220px) * 0.86), 224px);
+  bottom: calc(var(--pet-crop-height, 300px) * var(--sleep-bottom-ratio, -0.045));
+  width: clamp(
+    var(--sleep-min-width, 154px),
+    calc(var(--pet-crop-width, 220px) * var(--sleep-width-ratio, 0.86)),
+    var(--sleep-max-width, 224px)
+  );
   transform: translate(-50%, 8px) scale(0.96);
 }
 
@@ -145,22 +153,22 @@ html[data-direction="right"] {
   --pet-facing: 1;
 }
 
-html[data-action="sit"] .sit-stool {
+html[data-action="sit"].has-sit-decoration .sit-stool {
   opacity: 0.98;
   transform: translate(-50%, 0) scale(1);
 }
 
 html[data-action="sit"] {
-  --pet-lift: calc(var(--pet-crop-height, 300px) * -0.13);
+  --pet-lift: calc(var(--pet-crop-height, 300px) * var(--sit-pet-lift-ratio, -0.13));
 }
 
-html[data-action="sleep"] .sleep-bed {
+html[data-action="sleep"].has-sleep-decoration .sleep-bed {
   opacity: 0.98;
   transform: translate(-50%, 0) scale(1);
 }
 
 html[data-action="sleep"] {
-  --pet-lift: calc(var(--pet-crop-height, 300px) * -0.34);
+  --pet-lift: calc(var(--pet-crop-height, 300px) * var(--sleep-pet-lift-ratio, -0.34));
 }
 
 html.is-dragging .drag-region {

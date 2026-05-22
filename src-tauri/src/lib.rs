@@ -40,7 +40,17 @@ struct Settings {
 struct AssetBundle {
     root_path: String,
     files: Vec<String>,
+    file_infos: Vec<AssetFileInfo>,
     is_custom: bool,
+    profile: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct AssetFileInfo {
+    name: String,
+    size: u64,
+    modified_ms: u128,
 }
 
 #[tauri::command]
@@ -116,6 +126,8 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, tauri::Error> {
 
 fn get_asset_bundle(app: &AppHandle) -> AssetBundle {
     let root_path = get_asset_root_path(app);
+    let file_infos = get_asset_file_infos(&root_path);
+    let files = file_infos.iter().map(|info| info.name.clone()).collect();
     let is_custom = app
         .state::<Mutex<PetState>>()
         .lock()
@@ -125,9 +137,11 @@ fn get_asset_bundle(app: &AppHandle) -> AssetBundle {
         .is_some_and(|custom_path| custom_path == &root_path);
 
     AssetBundle {
-        files: get_asset_files(&root_path),
+        files,
+        file_infos,
         root_path: path_to_string(&root_path),
         is_custom,
+        profile: read_profile(&root_path),
     }
 }
 
@@ -168,11 +182,21 @@ fn get_default_asset_root_path(app: &AppHandle) -> PathBuf {
 }
 
 fn get_asset_files(asset_root_path: &Path) -> Vec<String> {
+    let mut files: Vec<String> = get_asset_file_infos(asset_root_path)
+        .into_iter()
+        .map(|info| info.name)
+        .collect();
+
+    files.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    files
+}
+
+fn get_asset_file_infos(asset_root_path: &Path) -> Vec<AssetFileInfo> {
     let Ok(entries) = fs::read_dir(asset_root_path) else {
         return Vec::new();
     };
 
-    let mut files: Vec<String> = entries
+    let mut file_infos: Vec<AssetFileInfo> = entries
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_file()))
         .filter_map(|entry| {
@@ -182,16 +206,33 @@ fn get_asset_files(asset_root_path: &Path) -> Vec<String> {
                 .and_then(|extension| extension.to_str())
                 .is_some_and(|extension| extension.eq_ignore_ascii_case("webm"));
 
-            if is_webm {
-                entry.file_name().to_str().map(ToOwned::to_owned)
-            } else {
-                None
+            if !is_webm {
+                return None;
             }
+
+            let metadata = entry.metadata().ok()?;
+            let modified_ms = metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis())
+                .unwrap_or_default();
+
+            Some(AssetFileInfo {
+                name: entry.file_name().to_str()?.to_owned(),
+                size: metadata.len(),
+                modified_ms,
+            })
         })
         .collect();
 
-    files.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
-    files
+    file_infos.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    file_infos
+}
+
+fn read_profile(asset_root_path: &Path) -> Option<serde_json::Value> {
+    let content = fs::read_to_string(asset_root_path.join("profile.json")).ok()?;
+    serde_json::from_str(&content).ok()
 }
 
 fn resolve_asset_file_path(app: &AppHandle, file_name: &str) -> Result<PathBuf, String> {
@@ -214,8 +255,12 @@ fn resolve_asset_file_path(app: &AppHandle, file_name: &str) -> Result<PathBuf, 
 
     let root_path = get_asset_root_path(app);
     let full_path = root_path.join(file_path);
-    let canonical_root = root_path.canonicalize().map_err(|error| error.to_string())?;
-    let canonical_file = full_path.canonicalize().map_err(|error| error.to_string())?;
+    let canonical_root = root_path
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let canonical_file = full_path
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
 
     if !canonical_file.starts_with(canonical_root) {
         return Err("动作文件不在当前动作文件夹内。".to_string());
@@ -300,7 +345,11 @@ fn build_context_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let top_item = MenuItem::with_id(
         app,
         "toggle-on-top",
-        if locked_on_top { "取消置顶" } else { "窗口置顶" },
+        if locked_on_top {
+            "取消置顶"
+        } else {
+            "窗口置顶"
+        },
         true,
         None::<&str>,
     )?;
@@ -319,8 +368,13 @@ fn build_context_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
 
     let say_item = MenuItem::with_id(app, "say-random", "说点什么", true, None::<&str>)?;
     let sleep_item = MenuItem::with_id(app, "sleep", "休息一下", true, None::<&str>)?;
-    let choose_folder_item =
-        MenuItem::with_id(app, "choose-folder", "选择动作文件夹...", true, None::<&str>)?;
+    let choose_folder_item = MenuItem::with_id(
+        app,
+        "choose-folder",
+        "选择动作文件夹...",
+        true,
+        None::<&str>,
+    )?;
     let reset_folder_item = MenuItem::with_id(
         app,
         "reset-folder",
@@ -346,7 +400,12 @@ fn build_context_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         app,
         "设置",
         true,
-        &[&choose_folder_item, &reset_folder_item, &settings_separator, &folder_label],
+        &[
+            &choose_folder_item,
+            &reset_folder_item,
+            &settings_separator,
+            &folder_label,
+        ],
     )?;
 
     let mut menu_items: Vec<&dyn tauri::menu::IsMenuItem<Wry>> = Vec::new();

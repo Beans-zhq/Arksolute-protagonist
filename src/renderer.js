@@ -25,6 +25,7 @@ const defaultSpecialAssetFiles = ['维什戴尔-绝对主角-基建-Special-x1.w
 let assetFiles = { ...defaultAssetFiles };
 
 let assetRootPath = null;
+let assetFileInfos = new Map();
 let specialAssetFiles = [...defaultSpecialAssetFiles];
 
 const temporaryActions = new Set(['interact', 'special']);
@@ -137,6 +138,36 @@ const walkLines = [
   '走动一下，脑子也能清醒一点。'
 ];
 
+const defaultLineSets = {
+  daily: dailyLines,
+  interaction: interactionLines,
+  special: specialLines,
+  walk: walkLines
+};
+
+const defaultDecorationProfiles = {
+  sit: {
+    enabled: true,
+    widthRatio: 0.48,
+    minWidth: 76,
+    maxWidth: 128,
+    bottomRatio: 0.012,
+    petLiftRatio: -0.13
+  },
+  sleep: {
+    enabled: true,
+    widthRatio: 0.86,
+    minWidth: 154,
+    maxWidth: 224,
+    bottomRatio: -0.045,
+    petLiftRatio: -0.34
+  }
+};
+
+let activeProfile = {};
+let activeDecorationProfiles = { ...defaultDecorationProfiles };
+let activeLineSets = { ...defaultLineSets };
+
 let currentAction = 'sit';
 let idleTimer;
 let talkTimer;
@@ -171,21 +202,26 @@ const visibleAlphaThreshold = 24;
 const measurementSampleCount = 5;
 const measurementCropPadding = 3;
 const measurementSeekTimeoutMs = 900;
+const metricsCacheVersion = 1;
+const metricsCacheStoragePrefix = 'absolute-protagonist.asset-metrics.';
 const mousePollMs = 40;
 const bubbleGap = 2;
 
-function configureAssetFiles(files) {
+function configureAssetFiles(files, profile = null) {
   if (!Array.isArray(files) || files.length === 0) return false;
 
   const nextAssetFiles = {};
   const nextSpecialAssetFiles = [];
+  const profileActions = normalizeProfileActions(profile?.actions);
 
   for (const file of files) {
     if (typeof file !== 'string' || !file.toLowerCase().endsWith('.webm')) continue;
 
-    const baseAction = getBaseActionFromAssetFile(file);
+    const baseAction = profileActions.get(file) || getBaseActionFromAssetFile(file);
 
-    if (baseAction) {
+    if (baseAction === 'special') {
+      nextSpecialAssetFiles.push(file);
+    } else if (baseAction) {
       nextAssetFiles[baseAction] = file;
     } else {
       nextSpecialAssetFiles.push(file);
@@ -195,6 +231,32 @@ function configureAssetFiles(files) {
   assetFiles = nextAssetFiles;
   specialAssetFiles = nextSpecialAssetFiles;
   return true;
+}
+
+function normalizeProfileActions(actions) {
+  const actionMap = new Map();
+  if (!actions || typeof actions !== 'object') return actionMap;
+
+  for (const [action, value] of Object.entries(actions)) {
+    const normalizedAction = normalizeActionName(action);
+    if (!normalizedAction) continue;
+
+    const files = Array.isArray(value) ? value : [value];
+    for (const file of files) {
+      if (typeof file === 'string' && file.toLowerCase().endsWith('.webm')) {
+        actionMap.set(file, normalizedAction);
+      }
+    }
+  }
+
+  return actionMap;
+}
+
+function normalizeActionName(action) {
+  const normalized = String(action || '').trim().toLowerCase();
+  if (['sit', 'relax', 'sleep', 'move', 'interact'].includes(normalized)) return normalized;
+  if (normalized === 'special') return 'special';
+  return null;
 }
 
 function getBaseActionFromAssetFile(file) {
@@ -257,11 +319,14 @@ function getIdleActions() {
 }
 
 async function applyAssetBundle(bundle) {
-  if (!bundle || !configureAssetFiles(bundle.files)) return false;
+  if (!bundle || !configureAssetFiles(bundle.files, bundle.profile)) return false;
 
   const loadToken = bundleLoadToken + 1;
   bundleLoadToken = loadToken;
   assetRootPath = bundle.rootPath;
+  assetFileInfos = normalizeAssetFileInfos(bundle.fileInfos);
+  activeProfile = normalizeProfile(bundle.profile);
+  applyProfile(activeProfile);
   currentAssetFile = null;
   currentMetrics = null;
   assetMetrics = new Map();
@@ -277,6 +342,79 @@ async function applyAssetBundle(bundle) {
   }
 
   return true;
+}
+
+function normalizeAssetFileInfos(fileInfos) {
+  const infoMap = new Map();
+  if (!Array.isArray(fileInfos)) return infoMap;
+
+  for (const info of fileInfos) {
+    if (!info || typeof info.name !== 'string') continue;
+    infoMap.set(info.name, {
+      name: info.name,
+      size: Number(info.size) || 0,
+      modifiedMs: Number(info.modifiedMs) || 0
+    });
+  }
+
+  return infoMap;
+}
+
+function normalizeProfile(profile) {
+  return profile && typeof profile === 'object' ? profile : {};
+}
+
+function applyProfile(profile) {
+  const decorations = mergeDecorationProfiles(profile.decorations);
+  activeDecorationProfiles = decorations;
+  applyDecorationProfile('sit', decorations.sit);
+  applyDecorationProfile('sleep', decorations.sleep);
+  activeLineSets = mergeLineSets(profile.lines);
+}
+
+function mergeDecorationProfiles(decorations) {
+  return {
+    sit: { ...defaultDecorationProfiles.sit, ...(decorations?.sit || {}) },
+    sleep: { ...defaultDecorationProfiles.sleep, ...(decorations?.sleep || {}) }
+  };
+}
+
+function applyDecorationProfile(action, profile) {
+  for (const [key, value] of Object.entries(profile)) {
+    const propertyName = `--${action}-${toKebabCase(key)}`;
+    document.documentElement.style.setProperty(propertyName, formatDecorationValue(key, value));
+  }
+
+  document.documentElement.classList.toggle(`has-${action}-decoration`, profile.enabled !== false);
+}
+
+function mergeLineSets(lines) {
+  return {
+    daily: mergeTextList(defaultLineSets.daily, lines?.daily),
+    interaction: mergeTextList(defaultLineSets.interaction, lines?.interaction),
+    special: mergeTextList(defaultLineSets.special, lines?.special),
+    walk: mergeTextList(defaultLineSets.walk, lines?.walk)
+  };
+}
+
+function mergeTextList(defaultList, customList) {
+  if (!Array.isArray(customList)) return defaultList;
+  const cleaned = customList.filter((line) => typeof line === 'string' && line.trim());
+  return cleaned.length > 0 ? cleaned : defaultList;
+}
+
+function toKebabCase(value) {
+  return value.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`);
+}
+
+function formatDecorationValue(key, value) {
+  if (['minWidth', 'maxWidth'].includes(key) && typeof value === 'number' && Number.isFinite(value)) {
+    return `${value}px`;
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  if (typeof value === 'boolean') return value ? '1' : '0';
+  return String(value ?? '');
 }
 
 async function setAction(action, options = {}) {
@@ -357,7 +495,7 @@ function say(text, duration = 5200) {
 }
 
 function sayRandom() {
-  say(randomFrom(dailyLines));
+  say(randomFrom(activeLineSets.daily));
 }
 
 function scheduleIdleAction() {
@@ -440,7 +578,7 @@ async function startRoaming(options = {}) {
 
   setDirection(direction);
   setAction('move', { restart: true });
-  if (Math.random() > 0.38) say(randomFrom(walkLines), 2600);
+  if (Math.random() > 0.38) say(randomFrom(activeLineSets.walk), 2600);
   animateRoaming();
 }
 
@@ -540,7 +678,9 @@ async function preloadAssetMetrics(files, loadToken) {
     if (assetMetrics.has(file)) continue;
 
     try {
-      const metrics = await measureAssetMetrics(file);
+      const cachedMetrics = readCachedAssetMetrics(file);
+      const metrics = cachedMetrics || (await measureAssetMetrics(file));
+      if (!cachedMetrics) writeCachedAssetMetrics(file, metrics);
       if (loadToken === bundleLoadToken) assetMetrics.set(file, metrics);
     } catch {
       // Invalid or unreadable assets are ignored; actions without metrics are not selected.
@@ -548,6 +688,113 @@ async function preloadAssetMetrics(files, loadToken) {
 
     await yieldToBrowser();
   }
+}
+
+function readCachedAssetMetrics(assetFile) {
+  const cacheKey = getMetricsCacheKey();
+  const signature = getAssetFileSignature(assetFile);
+  if (!cacheKey || !signature) return null;
+
+  try {
+    const rawCache = window.localStorage.getItem(cacheKey);
+    if (!rawCache) return null;
+
+    const cache = JSON.parse(rawCache);
+    const entry = cache?.entries?.[assetFile];
+    if (!entry || !isSameFileSignature(entry.signature, signature)) return null;
+    if (!isUsableMetrics(entry.metrics)) return null;
+
+    return entry.metrics;
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedAssetMetrics(assetFile, metrics) {
+  const cacheKey = getMetricsCacheKey();
+  const signature = getAssetFileSignature(assetFile);
+  if (!cacheKey || !signature || !isUsableMetrics(metrics)) return;
+
+  try {
+    const cache = readMetricsCache(cacheKey);
+    cache.version = metricsCacheVersion;
+    cache.rootPath = assetRootPath || '';
+    cache.entries[assetFile] = {
+      signature,
+      metrics
+    };
+    window.localStorage.setItem(cacheKey, JSON.stringify(cache));
+  } catch {
+    // Cache writes are an optimization; runtime should continue without them.
+  }
+}
+
+function readMetricsCache(cacheKey) {
+  try {
+    const cache = JSON.parse(window.localStorage.getItem(cacheKey) || '');
+    if (cache?.version === metricsCacheVersion && cache.entries && typeof cache.entries === 'object') {
+      return cache;
+    }
+  } catch {
+    // Fall through to an empty cache.
+  }
+
+  return {
+    version: metricsCacheVersion,
+    rootPath: assetRootPath || '',
+    entries: {}
+  };
+}
+
+function getMetricsCacheKey() {
+  if (!assetRootPath) return null;
+  return `${metricsCacheStoragePrefix}${hashText(assetRootPath)}`;
+}
+
+function getAssetFileSignature(assetFile) {
+  const info = assetFileInfos.get(assetFile);
+  if (!info) return null;
+
+  return {
+    size: info.size,
+    modifiedMs: info.modifiedMs
+  };
+}
+
+function isSameFileSignature(left, right) {
+  return (
+    left &&
+    right &&
+    Number(left.size) === Number(right.size) &&
+    Math.round(Number(left.modifiedMs)) === Math.round(Number(right.modifiedMs))
+  );
+}
+
+function isUsableMetrics(metrics) {
+  return (
+    metrics &&
+    Number.isFinite(metrics.videoWidth) &&
+    Number.isFinite(metrics.videoHeight) &&
+    Number.isFinite(metrics.cropWidth) &&
+    Number.isFinite(metrics.cropHeight) &&
+    metrics.crop &&
+    Number.isFinite(metrics.crop.left) &&
+    Number.isFinite(metrics.crop.top) &&
+    Number.isFinite(metrics.crop.right) &&
+    Number.isFinite(metrics.crop.bottom) &&
+    metrics.anchor &&
+    Number.isFinite(metrics.anchor.x) &&
+    Number.isFinite(metrics.anchor.y)
+  );
+}
+
+function hashText(text) {
+  let hash = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+  }
+
+  return hash.toString(36);
 }
 
 async function measureAssetMetrics(assetFile) {
@@ -797,7 +1044,7 @@ function getRenderedContentBounds(renderedPet) {
     bottom: renderedPet.y + renderedPet.height
   };
 
-  if (currentAction === 'sit' && stool) {
+  if (currentAction === 'sit' && stool && activeDecorationProfiles.sit?.enabled !== false) {
     const stoolRect = stool.getBoundingClientRect();
     if (stoolRect.width > 0 && stoolRect.height > 0) {
       bounds = unionBoundsWith(bounds, {
@@ -809,7 +1056,7 @@ function getRenderedContentBounds(renderedPet) {
     }
   }
 
-  if (currentAction === 'sleep' && bed) {
+  if (currentAction === 'sleep' && bed && activeDecorationProfiles.sleep?.enabled !== false) {
     const bedRect = bed.getBoundingClientRect();
     if (bedRect.width > 0 && bedRect.height > 0) {
       bounds = unionBoundsWith(bounds, {
@@ -1018,7 +1265,7 @@ function scheduleInteractionClick() {
     }
 
     setAction('interact');
-    say(randomFrom(interactionLines), 3600);
+    say(randomFrom(activeLineSets.interaction), 3600);
   }, 180);
 }
 
@@ -1045,7 +1292,7 @@ dragRegion.addEventListener('dblclick', (event) => {
   window.clearTimeout(roamTimer);
   scheduleRoaming(randomBetween(7600, 13000));
   setAction('special');
-  say(randomFrom(specialLines), 5200);
+  say(randomFrom(activeLineSets.special), 5200);
 });
 
 dragRegion.addEventListener('mouseenter', () => {

@@ -1,0 +1,35 @@
+{
+  "name": "Absolute protagonist",
+  "actions": {
+    "sit": "维什戴尔-绝对主角-基建-Sit-x1.webm",
+    "relax": "维什戴尔-绝对主角-基建-Relax-x1.webm",
+    "sleep": "维什戴尔-绝对主角-基建-Sleep-x1.webm",
+    "move": "维什戴尔-绝对主角-基建-Move-x1.webm",
+    "interact": "维什戴尔-绝对主角-基建-Interact-x1.webm",
+    "special": ["维什戴尔-绝对主角-基建-Special-x1.webm"]
+  },
+  "decorations": {
+    "sit": {
+      "enabled": true,
+      "widthRatio": 0.48,
+      "minWidth": 76,
+      "maxWidth": 128,
+      "bottomRatio": 0.012,
+      "petLiftRatio": -0.13
+    },
+    "sleep": {
+      "enabled": true,
+      "widthRatio": 0.86,
+      "minWidth": 154,
+      "maxWidth": 224,
+      "bottomRatio": -0.045,
+      "petLiftRatio": -0.34
+    }
+  },
+  "lines": {
+    "daily": [],
+    "interaction": [],
+    "special": [],
+    "walk": []
+  }
+}
