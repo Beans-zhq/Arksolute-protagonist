@@ -195,6 +195,8 @@ let currentAssetFile = assetFiles.sit;
 let assetUrls = new Map();
 let actionLoadToken = 0;
 let bundleLoadToken = 0;
+let manualActionHoldUntil = 0;
+let manualHeldAction = null;
 
 const clickThreshold = 5;
 const dragSampleMs = 16;
@@ -204,6 +206,7 @@ const measurementCropPadding = 3;
 const measurementSeekTimeoutMs = 900;
 const metricsCacheVersion = 1;
 const metricsCacheStoragePrefix = 'absolute-protagonist.asset-metrics.';
+const manualActionHoldMs = 10000;
 const mousePollMs = 40;
 const bubbleGap = 2;
 
@@ -470,6 +473,13 @@ async function setAction(action, options = {}) {
   window.clearTimeout(temporaryTimer);
   if (temporaryActions.has(action)) {
     temporaryTimer = window.setTimeout(() => {
+      if (isManualActionHoldActive()) {
+        temporaryTimer = window.setTimeout(() => {
+          setAction(randomFrom(getIdleActions()));
+        }, getManualActionHoldRemaining());
+        return;
+      }
+
       setAction(randomFrom(getIdleActions()));
     }, options.duration || (action === 'special' ? 7600 : 3400));
   }
@@ -498,10 +508,23 @@ function sayRandom() {
   say(randomFrom(activeLineSets.daily));
 }
 
+function holdManualAction(action) {
+  manualActionHoldUntil = performance.now() + manualActionHoldMs;
+  manualHeldAction = action;
+}
+
+function getManualActionHoldRemaining() {
+  return Math.max(0, manualActionHoldUntil - performance.now());
+}
+
+function isManualActionHoldActive() {
+  return getManualActionHoldRemaining() > 0;
+}
+
 function scheduleIdleAction() {
   window.clearTimeout(idleTimer);
   idleTimer = window.setTimeout(() => {
-    if (!isRoaming && !temporaryActions.has(currentAction)) {
+    if (!isManualActionHoldActive() && !isRoaming && !temporaryActions.has(currentAction)) {
       setAction(randomFrom(getIdleActions()));
     }
     scheduleIdleAction();
@@ -524,6 +547,11 @@ function scheduleRoaming(delay = randomBetween(5000, 13000)) {
 }
 
 async function startRoaming(options = {}) {
+  if (!options.force && isManualActionHoldActive()) {
+    scheduleRoaming(getManualActionHoldRemaining() + randomBetween(800, 2200));
+    return;
+  }
+
   if (isDragging || (!options.force && temporaryActions.has(currentAction))) {
     scheduleRoaming(randomBetween(2400, 5200));
     return;
@@ -626,6 +654,17 @@ function stopRoaming() {
 
 function settleAfterRoam(hitEdge = false) {
   isRoaming = false;
+  if (manualHeldAction === 'move' && isManualActionHoldActive()) {
+    if (hitEdge && Math.random() > 0.35) {
+      say('到边界了。看来桌面也有尽头。', 3200);
+    }
+    window.clearTimeout(roamTimer);
+    roamTimer = window.setTimeout(() => {
+      startRoaming({ force: true });
+    }, randomBetween(300, 900));
+    return;
+  }
+
   setAction(randomFrom(getIdleActions()));
   if (hitEdge && Math.random() > 0.35) {
     say('到边界了。看来桌面也有尽头。', 3200);
@@ -1308,6 +1347,7 @@ window.addEventListener('contextmenu', (event) => {
 });
 
 window.desktopPet.onSetAction((action) => {
+  holdManualAction(action);
   stopRoaming();
   if (action === 'move') {
     startRoaming({ force: true });
@@ -1337,7 +1377,9 @@ window.desktopPet.onAssetsChanged((assets) => {
 });
 
 video.addEventListener('ended', () => {
-  if (temporaryActions.has(currentAction)) setAction(randomFrom(getIdleActions()));
+  if (!isManualActionHoldActive() && temporaryActions.has(currentAction)) {
+    setAction(randomFrom(getIdleActions()));
+  }
 });
 
 window.addEventListener('resize', () => {
