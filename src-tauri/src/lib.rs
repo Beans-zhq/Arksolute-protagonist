@@ -13,11 +13,20 @@ use tauri::{
 
 const ACTIONS: [&str; 6] = ["sit", "relax", "sleep", "move", "interact", "special"];
 const SETTINGS_FILE_NAME: &str = "settings.json";
+const DEFAULT_WEBM_ASSET_ROOT: [&str; 2] = ["webm-assets", "绝对主角"];
+const SUPPORTED_ASSET_EXTENSIONS: [&str; 4] = ["webm", "skel", "atlas", "png"];
+const MAX_ASSET_FOLDER_SEARCH_DEPTH: usize = 4;
+const DEFAULT_PET_SIZE_PERCENT: u32 = 100;
+const MIN_PET_SIZE_PERCENT: u32 = 50;
+const MAX_PET_SIZE_PERCENT: u32 = 200;
+const PET_SIZE_STEP_PERCENT: u32 = 10;
+const PET_SIZE_OPTIONS: [u32; 11] = [80, 90, 100, 110, 120, 130, 140, 150, 160, 180, 200];
 
 #[derive(Debug)]
 struct PetState {
     locked_on_top: bool,
     custom_asset_root_path: Option<PathBuf>,
+    pet_size_percent: u32,
 }
 
 impl Default for PetState {
@@ -25,6 +34,7 @@ impl Default for PetState {
         Self {
             locked_on_top: true,
             custom_asset_root_path: None,
+            pet_size_percent: DEFAULT_PET_SIZE_PERCENT,
         }
     }
 }
@@ -33,11 +43,14 @@ impl Default for PetState {
 #[serde(rename_all = "camelCase")]
 struct Settings {
     asset_root_path: Option<PathBuf>,
+    #[serde(default = "default_pet_size_percent")]
+    pet_size_percent: u32,
 }
 
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct AssetBundle {
+    renderer: String,
     root_path: String,
     files: Vec<String>,
     file_infos: Vec<AssetFileInfo>,
@@ -51,6 +64,13 @@ struct AssetFileInfo {
     name: String,
     size: u64,
     modified_ms: u128,
+}
+
+#[derive(Debug, Clone)]
+struct BuiltinSpineCharacter {
+    id: String,
+    name: String,
+    asset_path: PathBuf,
 }
 
 #[tauri::command]
@@ -71,25 +91,23 @@ fn show_menu(app: AppHandle, window: WebviewWindow) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn choose_asset_folder(app: AppHandle) -> Result<(), String> {
-    choose_asset_folder_inner(&app);
-    Ok(())
-}
-
-#[tauri::command]
-fn reset_asset_folder(app: AppHandle) -> Result<(), String> {
-    reset_asset_folder_inner(&app);
-    Ok(())
+fn get_pet_size(app: AppHandle) -> Result<u32, String> {
+    Ok(current_pet_size_percent(&app))
 }
 
 fn load_settings(app: &AppHandle) {
     let settings = read_settings(app);
     let custom_asset_root_path = settings
-        .and_then(|settings| settings.asset_root_path)
+        .as_ref()
+        .and_then(|settings| settings.asset_root_path.clone())
         .filter(|path| path.is_dir());
+    let pet_size_percent = settings
+        .map(|settings| normalize_pet_size_percent(settings.pet_size_percent))
+        .unwrap_or(DEFAULT_PET_SIZE_PERCENT);
 
     if let Ok(mut state) = app.state::<Mutex<PetState>>().lock() {
         state.custom_asset_root_path = custom_asset_root_path;
+        state.pet_size_percent = pet_size_percent;
     }
 }
 
@@ -99,18 +117,35 @@ fn read_settings(app: &AppHandle) -> Option<Settings> {
     serde_json::from_str(&content).ok()
 }
 
+fn default_pet_size_percent() -> u32 {
+    DEFAULT_PET_SIZE_PERCENT
+}
+
+fn normalize_pet_size_percent(value: u32) -> u32 {
+    value.clamp(MIN_PET_SIZE_PERCENT, MAX_PET_SIZE_PERCENT)
+}
+
 fn save_settings(app: &AppHandle) {
-    let asset_root_path = app
+    let (asset_root_path, pet_size_percent) = app
         .state::<Mutex<PetState>>()
         .lock()
         .ok()
-        .and_then(|state| state.custom_asset_root_path.clone());
+        .map(|state| {
+            (
+                state.custom_asset_root_path.clone(),
+                normalize_pet_size_percent(state.pet_size_percent),
+            )
+        })
+        .unwrap_or((None, DEFAULT_PET_SIZE_PERCENT));
 
     let Some(settings_path) = settings_path(app).ok() else {
         return;
     };
 
-    let settings = Settings { asset_root_path };
+    let settings = Settings {
+        asset_root_path,
+        pet_size_percent,
+    };
     if let Some(parent) = settings_path.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -125,9 +160,10 @@ fn settings_path(app: &AppHandle) -> Result<PathBuf, tauri::Error> {
 }
 
 fn get_asset_bundle(app: &AppHandle) -> AssetBundle {
-    let root_path = get_asset_root_path(app);
+    let root_path = normalize_asset_root_path(get_asset_root_path(app));
     let file_infos = get_asset_file_infos(&root_path);
     let files = file_infos.iter().map(|info| info.name.clone()).collect();
+    let renderer = detect_asset_renderer(&file_infos);
     let is_custom = app
         .state::<Mutex<PetState>>()
         .lock()
@@ -137,6 +173,7 @@ fn get_asset_bundle(app: &AppHandle) -> AssetBundle {
         .is_some_and(|custom_path| custom_path == &root_path);
 
     AssetBundle {
+        renderer,
         files,
         file_infos,
         root_path: path_to_string(&root_path),
@@ -159,36 +196,155 @@ fn get_asset_root_path(app: &AppHandle) -> PathBuf {
     get_default_asset_root_path(app)
 }
 
+fn normalize_asset_root_path(root_path: PathBuf) -> PathBuf {
+    if is_usable_asset_folder(&root_path) {
+        return root_path;
+    }
+
+    find_first_usable_child_asset_folder(&root_path).unwrap_or(root_path)
+}
+
+fn find_first_usable_child_asset_folder(root_path: &Path) -> Option<PathBuf> {
+    find_first_usable_child_asset_folder_with_depth(root_path, MAX_ASSET_FOLDER_SEARCH_DEPTH)
+}
+
+fn find_first_usable_child_asset_folder_with_depth(root_path: &Path, depth: usize) -> Option<PathBuf> {
+    if depth == 0 {
+        return None;
+    }
+
+    let entries = fs::read_dir(root_path).ok()?;
+
+    let mut child_dirs: Vec<PathBuf> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_dir()))
+        .map(|entry| entry.path())
+        .collect();
+    child_dirs.sort_by(|a, b| {
+        path_to_string(a)
+            .to_lowercase()
+            .cmp(&path_to_string(b).to_lowercase())
+    });
+
+    for child_dir in child_dirs {
+        if is_usable_asset_folder(&child_dir) {
+            return Some(child_dir);
+        }
+
+        if let Some(asset_path) =
+            find_first_usable_child_asset_folder_with_depth(&child_dir, depth - 1)
+        {
+            return Some(asset_path);
+        }
+    }
+
+    None
+}
+
 fn get_default_asset_root_path(app: &AppHandle) -> PathBuf {
     let mut candidates = Vec::new();
 
-    if let Ok(resource_assets) = app.path().resolve("assets", BaseDirectory::Resource) {
+    if let Ok(resource_assets) = app
+        .path()
+        .resolve(DEFAULT_WEBM_ASSET_ROOT.join("/"), BaseDirectory::Resource)
+    {
         candidates.push(resource_assets);
     }
 
     if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        candidates.push(PathBuf::from(manifest_dir).join("..").join("assets"));
+        candidates.push(
+            DEFAULT_WEBM_ASSET_ROOT
+                .iter()
+                .fold(PathBuf::from(manifest_dir).join(".."), |path, part| {
+                    path.join(part)
+                }),
+        );
     }
 
     if let Ok(current_dir) = std::env::current_dir() {
-        candidates.push(current_dir.join("assets"));
-        candidates.push(current_dir.join("..").join("assets"));
+        candidates.push(
+            DEFAULT_WEBM_ASSET_ROOT
+                .iter()
+                .fold(current_dir.clone(), |path, part| path.join(part)),
+        );
+        candidates.push(
+            DEFAULT_WEBM_ASSET_ROOT
+                .iter()
+                .fold(current_dir.join(".."), |path, part| path.join(part)),
+        );
     }
 
     candidates
         .into_iter()
         .find(|path| path.is_dir())
-        .unwrap_or_else(|| PathBuf::from("assets"))
+        .unwrap_or_else(|| DEFAULT_WEBM_ASSET_ROOT.iter().collect())
 }
 
-fn get_asset_files(asset_root_path: &Path) -> Vec<String> {
-    let mut files: Vec<String> = get_asset_file_infos(asset_root_path)
-        .into_iter()
-        .map(|info| info.name)
+fn get_builtin_spine_root_path(app: &AppHandle) -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Ok(resource_spine_assets) = app.path().resolve("spine-assets", BaseDirectory::Resource) {
+        candidates.push(resource_spine_assets);
+    }
+
+    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        candidates.push(PathBuf::from(manifest_dir).join("..").join("spine-assets"));
+    }
+
+    if let Ok(current_dir) = std::env::current_dir() {
+        candidates.push(current_dir.join("spine-assets"));
+        candidates.push(current_dir.join("..").join("spine-assets"));
+    }
+
+    candidates.into_iter().find(|path| path.is_dir())
+}
+
+fn get_builtin_spine_characters(app: &AppHandle) -> Vec<BuiltinSpineCharacter> {
+    let Some(spine_root_path) = get_builtin_spine_root_path(app) else {
+        return Vec::new();
+    };
+    let Ok(entries) = fs::read_dir(spine_root_path) else {
+        return Vec::new();
+    };
+
+    let mut characters: Vec<BuiltinSpineCharacter> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_dir()))
+        .filter_map(|entry| {
+            let name = entry.file_name().to_str()?.to_owned();
+            let asset_path = normalize_asset_root_path(entry.path());
+            if detect_asset_renderer(&get_asset_file_infos(&asset_path)) != "spine" {
+                return None;
+            }
+
+            Some(BuiltinSpineCharacter {
+                id: sanitize_menu_id(&name),
+                name,
+                asset_path,
+            })
+        })
         .collect();
 
-    files.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
-    files
+    characters.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    characters
+}
+
+fn detect_asset_renderer(file_infos: &[AssetFileInfo]) -> String {
+    let has_skel = file_infos
+        .iter()
+        .any(|info| has_extension(&info.name, "skel"));
+    let has_atlas = file_infos
+        .iter()
+        .any(|info| has_extension(&info.name, "atlas"));
+    let has_png = file_infos
+        .iter()
+        .any(|info| has_extension(&info.name, "png"));
+
+    if has_skel && has_atlas && has_png {
+        "spine".to_string()
+    } else {
+        "webm".to_string()
+    }
 }
 
 fn get_asset_file_infos(asset_root_path: &Path) -> Vec<AssetFileInfo> {
@@ -201,12 +357,16 @@ fn get_asset_file_infos(asset_root_path: &Path) -> Vec<AssetFileInfo> {
         .filter(|entry| entry.file_type().is_ok_and(|file_type| file_type.is_file()))
         .filter_map(|entry| {
             let path = entry.path();
-            let is_webm = path
+            let is_supported = path
                 .extension()
                 .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("webm"));
+                .is_some_and(|extension| {
+                    SUPPORTED_ASSET_EXTENSIONS
+                        .iter()
+                        .any(|supported| extension.eq_ignore_ascii_case(supported))
+                });
 
-            if !is_webm {
+            if !is_supported {
                 return None;
             }
 
@@ -245,15 +405,19 @@ fn resolve_asset_file_path(app: &AppHandle, file_name: &str) -> Result<PathBuf, 
         return Err("动作文件名无效。".to_string());
     }
 
-    let is_webm = file_path
+    let is_supported = file_path
         .extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("webm"));
-    if !is_webm {
-        return Err("只能读取 .webm 动作文件。".to_string());
+        .is_some_and(|extension| {
+            SUPPORTED_ASSET_EXTENSIONS
+                .iter()
+                .any(|supported| extension.eq_ignore_ascii_case(supported))
+        });
+    if !is_supported {
+        return Err("只能读取支持的素材文件。".to_string());
     }
 
-    let root_path = get_asset_root_path(app);
+    let root_path = normalize_asset_root_path(get_asset_root_path(app));
     let full_path = root_path.join(file_path);
     let canonical_root = root_path
         .canonicalize()
@@ -269,8 +433,23 @@ fn resolve_asset_file_path(app: &AppHandle, file_name: &str) -> Result<PathBuf, 
     Ok(canonical_file)
 }
 
+fn has_extension(file_name: &str, extension: &str) -> bool {
+    Path::new(file_name)
+        .extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|value| value.eq_ignore_ascii_case(extension))
+}
+
+fn sanitize_menu_id(value: &str) -> String {
+    value
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 fn get_asset_folder_label(app: &AppHandle) -> String {
-    let root_path = get_asset_root_path(app);
+    let root_path = normalize_asset_root_path(get_asset_root_path(app));
     let is_custom = app
         .state::<Mutex<PetState>>()
         .lock()
@@ -280,7 +459,7 @@ fn get_asset_folder_label(app: &AppHandle) -> String {
         .is_some_and(|custom_path| custom_path == &root_path);
 
     if !is_custom {
-        return "内置 assets".to_string();
+        return "内置 webm-assets\\绝对主角".to_string();
     }
 
     root_path
@@ -300,13 +479,23 @@ fn choose_asset_folder_inner(app: &AppHandle) {
         return;
     };
 
-    if get_asset_files(&next_root_path).is_empty() {
-        let _ = rfd::MessageDialog::new()
-            .set_title("没有找到动作文件")
-            .set_description("这个文件夹里没有 .webm 动作文件，请选择包含 WebM 动作资源的文件夹。")
-            .set_level(rfd::MessageLevel::Warning)
-            .show();
-        return;
+    if !is_usable_asset_folder(&next_root_path) {
+        if let Some(child_path) = find_first_usable_child_asset_folder(&next_root_path) {
+            if let Ok(mut state) = app.state::<Mutex<PetState>>().lock() {
+                state.custom_asset_root_path = Some(child_path);
+            }
+
+            save_settings(app);
+            notify_asset_bundle_changed(app);
+            return;
+        } else {
+            let _ = rfd::MessageDialog::new()
+                .set_title("没有找到动作文件")
+                .set_description("这个文件夹里没有可用素材，请选择包含 WebM 动作或 Spine skel/atlas/png 的文件夹。")
+                .set_level(rfd::MessageLevel::Warning)
+                .show();
+            return;
+        }
     }
 
     if let Ok(mut state) = app.state::<Mutex<PetState>>().lock() {
@@ -315,6 +504,18 @@ fn choose_asset_folder_inner(app: &AppHandle) {
 
     save_settings(app);
     notify_asset_bundle_changed(app);
+}
+
+fn is_usable_asset_folder(asset_root_path: &Path) -> bool {
+    let file_infos = get_asset_file_infos(asset_root_path);
+    if file_infos
+        .iter()
+        .any(|info| has_extension(&info.name, "webm"))
+    {
+        return true;
+    }
+
+    detect_asset_renderer(&file_infos) == "spine"
 }
 
 fn reset_asset_folder_inner(app: &AppHandle) {
@@ -330,6 +531,34 @@ fn notify_asset_bundle_changed(app: &AppHandle) {
     let _ = app.emit_to("main", "pet:assets-changed", get_asset_bundle(app));
 }
 
+fn current_pet_size_percent(app: &AppHandle) -> u32 {
+    app.state::<Mutex<PetState>>()
+        .lock()
+        .map(|state| normalize_pet_size_percent(state.pet_size_percent))
+        .unwrap_or(DEFAULT_PET_SIZE_PERCENT)
+}
+
+fn notify_pet_size_changed(app: &AppHandle) {
+    let _ = app.emit_to("main", "pet:size-changed", current_pet_size_percent(app));
+}
+
+fn set_pet_size_percent(app: &AppHandle, percent: u32) {
+    let next_percent = normalize_pet_size_percent(percent);
+
+    if let Ok(mut state) = app.state::<Mutex<PetState>>().lock() {
+        state.pet_size_percent = next_percent;
+    }
+
+    save_settings(app);
+    notify_pet_size_changed(app);
+}
+
+fn adjust_pet_size_percent(app: &AppHandle, delta: i32) {
+    let current = current_pet_size_percent(app) as i32;
+    let next = (current + delta).clamp(MIN_PET_SIZE_PERCENT as i32, MAX_PET_SIZE_PERCENT as i32);
+    set_pet_size_percent(app, next as u32);
+}
+
 fn build_context_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
     let locked_on_top = app
         .state::<Mutex<PetState>>()
@@ -341,6 +570,7 @@ fn build_context_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         .lock()
         .map(|state| state.custom_asset_root_path.is_some())
         .unwrap_or(false);
+    let pet_size_percent = current_pet_size_percent(app);
 
     let top_item = MenuItem::with_id(
         app,
@@ -382,6 +612,93 @@ fn build_context_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         has_custom_asset_root,
         None::<&str>,
     )?;
+    let size_smaller_item = MenuItem::with_id(
+        app,
+        "pet-size:smaller",
+        "缩小 10%",
+        pet_size_percent > MIN_PET_SIZE_PERCENT,
+        None::<&str>,
+    )?;
+    let size_larger_item = MenuItem::with_id(
+        app,
+        "pet-size:larger",
+        "放大 10%",
+        pet_size_percent < MAX_PET_SIZE_PERCENT,
+        None::<&str>,
+    )?;
+    let size_reset_item = MenuItem::with_id(
+        app,
+        "pet-size:100",
+        "恢复 100%",
+        pet_size_percent != DEFAULT_PET_SIZE_PERCENT,
+        None::<&str>,
+    )?;
+    let size_separator = PredefinedMenuItem::separator(app)?;
+    let size_option_items: Vec<MenuItem<tauri::Wry>> = PET_SIZE_OPTIONS
+        .iter()
+        .map(|percent| {
+            let label = if *percent == pet_size_percent {
+                format!("✓ {percent}%")
+            } else {
+                format!("{percent}%")
+            };
+            MenuItem::with_id(
+                app,
+                format!("pet-size:{percent}"),
+                label,
+                *percent != pet_size_percent,
+                None::<&str>,
+            )
+        })
+        .collect::<tauri::Result<_>>()?;
+    let mut size_menu_items: Vec<&dyn tauri::menu::IsMenuItem<Wry>> = Vec::new();
+    size_menu_items.push(&size_smaller_item);
+    size_menu_items.push(&size_larger_item);
+    size_menu_items.push(&size_reset_item);
+    size_menu_items.push(&size_separator);
+    for item in &size_option_items {
+        size_menu_items.push(item);
+    }
+    let size_menu = Submenu::with_items(
+        app,
+        format!("桌宠大小：{pet_size_percent}%"),
+        true,
+        &size_menu_items,
+    )?;
+    let builtin_spine_characters = get_builtin_spine_characters(app);
+    let builtin_spine_items: Vec<MenuItem<tauri::Wry>> = builtin_spine_characters
+        .iter()
+        .take(80)
+        .map(|character| {
+            MenuItem::with_id(
+                app,
+                format!("builtin-spine:{}", character.id),
+                &character.name,
+                true,
+                None::<&str>,
+            )
+        })
+        .collect::<tauri::Result<_>>()?;
+    let builtin_spine_limit_item = MenuItem::with_id(
+        app,
+        "builtin-spine-limit",
+        format!("仅显示前 80 个，共 {} 个", builtin_spine_characters.len()),
+        false,
+        None::<&str>,
+    )?;
+    let mut builtin_spine_menu_items: Vec<&dyn tauri::menu::IsMenuItem<Wry>> = Vec::new();
+    for item in &builtin_spine_items {
+        builtin_spine_menu_items.push(item);
+    }
+    if builtin_spine_characters.len() > builtin_spine_items.len() {
+        builtin_spine_menu_items.push(&builtin_spine_limit_item);
+    }
+    let builtin_spine_menu = Submenu::with_items(
+        app,
+        "内置 Spine 角色",
+        !builtin_spine_menu_items.is_empty(),
+        &builtin_spine_menu_items,
+    )?;
     let folder_label = MenuItem::with_id(
         app,
         "folder-label",
@@ -403,6 +720,8 @@ fn build_context_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         &[
             &choose_folder_item,
             &reset_folder_item,
+            &size_menu,
+            &builtin_spine_menu,
             &settings_separator,
             &folder_label,
         ],
@@ -443,6 +762,24 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         return;
     }
 
+    if let Some(character_id) = id.strip_prefix("builtin-spine:") {
+        choose_builtin_spine_character(app, character_id);
+        return;
+    }
+
+    if let Some(size_action) = id.strip_prefix("pet-size:") {
+        match size_action {
+            "smaller" => adjust_pet_size_percent(app, -(PET_SIZE_STEP_PERCENT as i32)),
+            "larger" => adjust_pet_size_percent(app, PET_SIZE_STEP_PERCENT as i32),
+            percent => {
+                if let Ok(percent) = percent.parse::<u32>() {
+                    set_pet_size_percent(app, percent);
+                }
+            }
+        }
+        return;
+    }
+
     match id {
         "toggle-on-top" => toggle_always_on_top(app),
         "say-random" => {
@@ -456,6 +793,22 @@ fn handle_menu_event(app: &AppHandle, id: &str) {
         "quit" => app.exit(0),
         _ => {}
     }
+}
+
+fn choose_builtin_spine_character(app: &AppHandle, character_id: &str) {
+    let Some(character) = get_builtin_spine_characters(app)
+        .into_iter()
+        .find(|character| character.id == character_id)
+    else {
+        return;
+    };
+
+    if let Ok(mut state) = app.state::<Mutex<PetState>>().lock() {
+        state.custom_asset_root_path = Some(character.asset_path);
+    }
+
+    save_settings(app);
+    notify_asset_bundle_changed(app);
 }
 
 fn toggle_always_on_top(app: &AppHandle) {
@@ -479,7 +832,12 @@ fn place_window_on_desktop(window: &WebviewWindow) -> tauri::Result<()> {
         return Ok(());
     };
     let work_area = monitor.work_area();
-    let x = work_area.position.x + work_area.size.width as i32 - bounds.width as i32 - 64;
+    let visual_content_width = 320;
+    let horizontal_margin = ((bounds.width as i32 - visual_content_width) / 2).max(0);
+    let x = work_area.position.x + work_area.size.width as i32
+        - horizontal_margin
+        - visual_content_width
+        - 64;
     let y = work_area.position.y + work_area.size.height as i32 - bounds.height as i32 - 18;
 
     window.set_position(PhysicalPosition::new(x, y))
@@ -534,8 +892,7 @@ pub fn run() {
             get_assets,
             read_asset_file,
             show_menu,
-            choose_asset_folder,
-            reset_asset_folder
+            get_pet_size
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

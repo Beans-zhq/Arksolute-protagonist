@@ -92,6 +92,10 @@ body {
   -webkit-app-region: no-drag;
 }
 
+html[data-renderer="spine"] .pet-viewport {
+  overflow: visible;
+}
+
 .pet-video {
   position: absolute;
   left: calc(var(--pet-offset-x, 0px) * -1);
@@ -100,6 +104,25 @@ body {
   height: var(--pet-full-height, 306px);
   object-fit: fill;
   pointer-events: none;
+}
+
+.spine-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: var(--spine-render-width, 100%);
+  height: var(--spine-render-height, 100%);
+  pointer-events: none;
+}
+
+html[data-renderer="spine"] .pet-video,
+html:not([data-renderer="spine"]) .spine-canvas {
+  display: none;
+}
+
+html[data-renderer="spine"] .sit-stool,
+html[data-renderer="spine"] .sleep-bed {
+  display: none;
 }
 
 .bubble {

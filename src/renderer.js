@@ -1,4 +1,5 @@
 const video = document.getElementById('petVideo');
+const spineCanvas = document.getElementById('spineCanvas');
 const petViewport = document.getElementById('petViewport');
 const stool = document.getElementById('sitStool');
 const bed = document.getElementById('sleepBed');
@@ -27,6 +28,15 @@ let assetFiles = { ...defaultAssetFiles };
 let assetRootPath = null;
 let assetFileInfos = new Map();
 let specialAssetFiles = [...defaultSpecialAssetFiles];
+let activeRenderer = 'webm';
+let spineAssetFiles = null;
+let spineApp = null;
+let spineReady = false;
+let spineAnimationMap = {};
+let spineAnimationNames = [];
+let spineAnimationEndAt = 0;
+let spineObjectUrls = new Map();
+let lastAssetBundleError = null;
 
 const temporaryActions = new Set(['interact', 'special']);
 
@@ -197,6 +207,7 @@ let actionLoadToken = 0;
 let bundleLoadToken = 0;
 let manualActionHoldUntil = 0;
 let manualHeldAction = null;
+let petSizeScale = 1;
 
 const clickThreshold = 5;
 const dragSampleMs = 16;
@@ -209,8 +220,31 @@ const metricsCacheStoragePrefix = 'absolute-protagonist.asset-metrics.';
 const manualActionHoldMs = 10000;
 const mousePollMs = 40;
 const bubbleGap = 2;
+const minPetSizeScale = 0.5;
+const maxPetSizeScale = 2;
+const defaultSpineSkeletonScale = 0.46;
+const defaultSpineDisplayScale = 0.55;
+const spinePixiSpriteMaxTextures = 1;
+const spineBoundsSampleCount = 8;
+const spineCanvasWidth = 292;
+const spineCanvasHeight = 344;
+const spineCanvasPadding = 18;
+const spineActionVisualOffsets = {
+  sit: { x: -10, y: 50 },
+  sleep: { x: -15, y: 90 }
+};
+const spineActionAntiClipPadding = {
+  sit: { bottom: 72 },
+  sleep: { bottom: 72 }
+};
 
 function configureAssetFiles(files, profile = null) {
+  activeRenderer = getBundleRenderer({ files, profile });
+
+  if (activeRenderer === 'spine') {
+    return configureSpineAssetFiles(files, profile);
+  }
+
   if (!Array.isArray(files) || files.length === 0) return false;
 
   const nextAssetFiles = {};
@@ -233,6 +267,50 @@ function configureAssetFiles(files, profile = null) {
 
   assetFiles = nextAssetFiles;
   specialAssetFiles = nextSpecialAssetFiles;
+  return true;
+}
+
+function getBundleRenderer(bundle) {
+  const profileRenderer = String(bundle?.profile?.renderer || '').trim().toLowerCase();
+  if (profileRenderer === 'spine' || profileRenderer === 'webm') return profileRenderer;
+  if (bundle?.renderer === 'spine') return 'spine';
+  if (Array.isArray(bundle?.files) && bundle.files.some((file) => /\.skel$/i.test(file))) return 'spine';
+  return 'webm';
+}
+
+function configureSpineAssetFiles(files, profile = null) {
+  if (!window.PIXI?.spine || !spineCanvas) {
+    lastAssetBundleError = 'Spine 3.8 运行时没有加载成功。';
+    return false;
+  }
+  if (!Array.isArray(files) || files.length === 0) return false;
+
+  const imageFiles = files.filter((file) => typeof file === 'string' && /\.png$/i.test(file));
+  const skeleton = profile?.spine?.skeleton || files.find((file) => /\.skel$/i.test(file));
+  const atlas = profile?.spine?.atlas || files.find((file) => /\.atlas$/i.test(file));
+  const image = profile?.spine?.image || imageFiles[0];
+
+  if (!skeleton || !atlas || !image) return false;
+
+  spineAssetFiles = {
+    skeleton,
+    atlas,
+    image,
+    images: [...new Set([image, ...imageFiles])],
+    scale: Number(profile?.spine?.scale) || defaultSpineSkeletonScale,
+    displayScale: Number(profile?.spine?.displayScale) || defaultSpineDisplayScale
+  };
+  spineAnimationMap = {};
+  spineAnimationNames = [];
+  spineAnimationEndAt = 0;
+  assetFiles = {
+    sit: 'spine:sit',
+    relax: 'spine:relax',
+    sleep: 'spine:sleep',
+    move: 'spine:move',
+    interact: 'spine:interact'
+  };
+  specialAssetFiles = ['spine:special'];
   return true;
 }
 
@@ -309,6 +387,14 @@ function revokeAssetUrls() {
   assetUrls = new Map();
 }
 
+function revokeSpineObjectUrls() {
+  for (const assetUrl of spineObjectUrls.values()) {
+    if (assetUrl.startsWith('blob:')) URL.revokeObjectURL(assetUrl);
+  }
+
+  spineObjectUrls = new Map();
+}
+
 function getFallbackAction() {
   return ['sit', 'relax', 'sleep', 'move', 'interact'].find((action) => assetFiles[action]) || null;
 }
@@ -322,6 +408,7 @@ function getIdleActions() {
 }
 
 async function applyAssetBundle(bundle) {
+  lastAssetBundleError = null;
   if (!bundle || !configureAssetFiles(bundle.files, bundle.profile)) return false;
 
   const loadToken = bundleLoadToken + 1;
@@ -330,13 +417,28 @@ async function applyAssetBundle(bundle) {
   assetFileInfos = normalizeAssetFileInfos(bundle.fileInfos);
   activeProfile = normalizeProfile(bundle.profile);
   applyProfile(activeProfile);
+  document.documentElement.dataset.renderer = activeRenderer;
   currentAssetFile = null;
   currentMetrics = null;
   assetMetrics = new Map();
   revokeAssetUrls();
+  revokeSpineObjectUrls();
+  disposeSpineApp();
   setMouseEventsIgnored(true);
 
-  await preloadAssetMetrics(bundle.files, loadToken);
+  if (activeRenderer === 'spine') {
+    await initializeSpineRenderer(loadToken);
+    if (!spineReady) {
+      activeRenderer = 'webm';
+      document.documentElement.dataset.renderer = activeRenderer;
+      configureAssetFiles(defaultAssetFiles ? Object.values(defaultAssetFiles) : [], { actions: defaultAssetFiles });
+      setMouseEventsIgnored(false);
+      return false;
+    }
+  } else {
+    await preloadAssetMetrics(bundle.files, loadToken);
+  }
+
   if (loadToken !== bundleLoadToken) return false;
 
   const nextAction = assetFiles[currentAction] ? currentAction : getFallbackAction();
@@ -385,7 +487,7 @@ function mergeDecorationProfiles(decorations) {
 function applyDecorationProfile(action, profile) {
   for (const [key, value] of Object.entries(profile)) {
     const propertyName = `--${action}-${toKebabCase(key)}`;
-    document.documentElement.style.setProperty(propertyName, formatDecorationValue(key, value));
+    document.documentElement.style.setProperty(propertyName, formatDecorationValue(key, value, getDecorationPixelScale()));
   }
 
   document.documentElement.classList.toggle(`has-${action}-decoration`, profile.enabled !== false);
@@ -410,9 +512,14 @@ function toKebabCase(value) {
   return value.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`);
 }
 
-function formatDecorationValue(key, value) {
+function getDecorationPixelScale() {
+  if (activeRenderer !== 'spine') return 1;
+  return Number(spineAssetFiles?.displayScale) > 0 ? Number(spineAssetFiles.displayScale) : defaultSpineDisplayScale;
+}
+
+function formatDecorationValue(key, value, pixelScale = 1) {
   if (['minWidth', 'maxWidth'].includes(key) && typeof value === 'number' && Number.isFinite(value)) {
-    return `${value}px`;
+    return `${Math.max(1, Math.round(value * pixelScale))}px`;
   }
 
   if (typeof value === 'number' && Number.isFinite(value)) return String(value);
@@ -420,7 +527,477 @@ function formatDecorationValue(key, value) {
   return String(value ?? '');
 }
 
+async function initializeSpineRenderer(loadToken) {
+  spineReady = false;
+  if (!spineAssetFiles || !assetRootPath || !window.PIXI?.spine) return;
+
+  const pixi = window.PIXI;
+  configurePixiRuntime(pixi);
+  const spineRuntime = pixi.spine;
+  const atlasKey = spineAssetFiles.atlas;
+  const skeletonKey = spineAssetFiles.skeleton;
+  const imageKeys = spineAssetFiles.images?.length ? spineAssetFiles.images : [spineAssetFiles.image];
+  let atlasText;
+  let skeletonBytes;
+  let imageUrls;
+
+  try {
+    [atlasText, skeletonBytes, imageUrls] = await Promise.all([
+      readAssetText(atlasKey),
+      readAssetBytes(skeletonKey),
+      Promise.all(imageKeys.map((fileName) => createSpineImageUrl(fileName)))
+    ]);
+  } catch (error) {
+    lastAssetBundleError = `Spine 素材读取失败：${getErrorMessage(error)}`;
+    console.error('Spine assets failed to read.', error);
+    return;
+  }
+
+  if (loadToken !== bundleLoadToken) return;
+
+  try {
+    const textureMap = await loadSpineTextures(pixi, imageKeys, imageUrls);
+    if (loadToken !== bundleLoadToken) return;
+
+    const atlas = await createPixiSpineAtlas(spineRuntime, atlasText, textureMap);
+    if (loadToken !== bundleLoadToken) return;
+
+    const atlasLoader = new spineRuntime.AtlasAttachmentLoader(atlas);
+    const skeletonBinary = new spineRuntime.SkeletonBinary(atlasLoader);
+    skeletonBinary.scale = spineAssetFiles.scale;
+    const skeletonData = skeletonBinary.readSkeletonData(skeletonBytes);
+    const spineObject = new spineRuntime.Spine(skeletonData);
+    spineObject.autoUpdate = false;
+    spineObject.visible = true;
+
+    const webglContext = createSpineWebglContext(spineCanvas);
+    const pixiApp = new pixi.Application({
+      view: spineCanvas,
+      context: webglContext || undefined,
+      width: 1,
+      height: 1,
+      transparent: true,
+      backgroundAlpha: 0,
+      antialias: true,
+      autoDensity: true,
+      resolution: window.devicePixelRatio || 1
+    });
+    pixiApp.stage.addChild(spineObject);
+    pixiApp.ticker.add(updatePixiSpineFrame);
+    pixiApp.ticker.start();
+
+    spineApp = {
+      renderer: 'pixi',
+      pixiApp,
+      spineObject,
+      skeleton: spineObject.skeleton,
+      state: spineObject.state,
+      skeletonData,
+      atlas,
+      textureMap
+    };
+    spineAnimationNames = skeletonData.animations.map((animation) => animation.name);
+    spineAnimationMap = buildSpineAnimationMap(activeProfile?.actions, spineAnimationNames);
+    spineReady = true;
+    rebuildSpineMetrics();
+  } catch (error) {
+    lastAssetBundleError = `Spine 初始化失败：${getErrorMessage(error)}`;
+    console.error('Spine initialize failed.', error);
+  }
+}
+
+function configurePixiRuntime(pixi) {
+  if (!pixi?.settings) return;
+
+  if (pixi.ENV?.WEBGL !== undefined) {
+    pixi.settings.PREFER_ENV = pixi.ENV.WEBGL;
+  }
+
+  if (pixi.settings.SPRITE_MAX_TEXTURES !== undefined) {
+    pixi.settings.SPRITE_MAX_TEXTURES = spinePixiSpriteMaxTextures;
+  }
+
+  if (pixi.MIPMAP_MODES?.OFF !== undefined) {
+    pixi.settings.MIPMAP_TEXTURES = pixi.MIPMAP_MODES.OFF;
+  }
+}
+
+function createSpineWebglContext(canvas) {
+  if (!canvas) return null;
+
+  const options = {
+    alpha: true,
+    antialias: true,
+    depth: false,
+    stencil: true,
+    premultipliedAlpha: true,
+    preserveDrawingBuffer: false
+  };
+
+  try {
+    const context = canvas.getContext('webgl', options) || canvas.getContext('experimental-webgl', options);
+    const maxTextures = Number(context?.getParameter(context.MAX_TEXTURE_IMAGE_UNITS)) || 0;
+    return maxTextures > 0 ? context : null;
+  } catch (error) {
+    console.warn('Spine WebGL context preflight failed.', error);
+    return null;
+  }
+}
+
+async function readAssetBytes(fileName) {
+  const bytes = await window.desktopPet.readAssetFile(fileName);
+  return new Uint8Array(bytes);
+}
+
+async function readAssetText(fileName) {
+  const bytes = await readAssetBytes(fileName);
+  return new TextDecoder('utf-8').decode(bytes);
+}
+
+async function createSpineImageUrl(fileName) {
+  return createSpineObjectUrl(fileName, 'image/png');
+}
+
+async function createSpineObjectUrl(fileName, mimeType) {
+  if (spineObjectUrls.has(fileName)) return spineObjectUrls.get(fileName);
+
+  const bytes = await readAssetBytes(fileName);
+  const objectUrl = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
+  spineObjectUrls.set(fileName, objectUrl);
+  return objectUrl;
+}
+
+async function loadSpineTextures(pixi, imageKeys, imageUrls) {
+  const entries = await Promise.all(
+    imageKeys.map(async (fileName, index) => {
+      const texture = await pixi.Texture.fromURL(imageUrls[index]);
+      return [getSpineTextureLookupKey(fileName), texture];
+    })
+  );
+
+  return new Map(entries);
+}
+
+function getSpineTextureLookupKey(fileName) {
+  return String(fileName || '').replace(/\\/g, '/').split('/').pop();
+}
+
+function createPixiSpineAtlas(spineRuntime, atlasText, textureMap) {
+  return new Promise((resolve, reject) => {
+    try {
+      const atlas = new spineRuntime.TextureAtlas(
+        atlasText,
+        (pageName, done) => {
+          const texture =
+            textureMap.get(pageName) ||
+            textureMap.get(getSpineTextureLookupKey(pageName)) ||
+            textureMap.values().next().value;
+          done(texture?.baseTexture || null);
+        },
+        (atlasResult) => {
+          if (!atlasResult) {
+            reject(new Error('贴图 atlas 加载失败。'));
+            return;
+          }
+          resolve(atlasResult);
+        }
+      );
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+function updatePixiSpineFrame(delta) {
+  if (!spineReady || !spineApp) return;
+  const deltaSeconds = (delta || 0) / 60;
+
+  spineApp.spineObject.update(deltaSeconds);
+  renderPixiSpine();
+
+  if (temporaryActions.has(currentAction) && spineAnimationEndAt > 0 && performance.now() >= spineAnimationEndAt) {
+    spineAnimationEndAt = 0;
+    setAction(randomFrom(getIdleActions()));
+  }
+}
+
+function renderPixiSpine() {
+  if (!spineReady || !spineApp || !currentMetrics) return;
+
+  const { pixiApp } = spineApp;
+  const metrics = currentMetrics;
+  const renderWidth = Math.max(1, Math.round(metrics.renderWidth || metrics.videoWidth));
+  const renderHeight = Math.max(1, Math.round(metrics.renderHeight || metrics.videoHeight));
+  if (pixiApp.renderer.width !== renderWidth || pixiApp.renderer.height !== renderHeight) {
+    pixiApp.renderer.resize(renderWidth, renderHeight);
+    applySpineCanvasDisplaySize(metrics);
+  }
+
+  positionSpineSkeleton(metrics);
+  pixiApp.renderer.render(pixiApp.stage);
+}
+
+function buildSpineAnimationMap(profileActions, animationNames) {
+  const map = {};
+  for (const action of ['sit', 'relax', 'sleep', 'move', 'interact', 'special']) {
+    const configured = normalizeSpineActionValue(profileActions?.[action], animationNames);
+    map[action] = configured || findSpineAnimationForAction(action, animationNames);
+  }
+
+  return map;
+}
+
+function normalizeSpineActionValue(value, animationNames) {
+  const values = Array.isArray(value) ? value : [value];
+  const matches = values.filter((name) => typeof name === 'string' && animationNames.includes(name));
+  if (matches.length === 0) return null;
+  return matches.length === 1 ? matches[0] : matches;
+}
+
+function findSpineAnimationForAction(action, animationNames) {
+  const candidates = {
+    sit: ['sit', 'idle', 'relax', 'wait', 'default'],
+    relax: ['relax', 'idle', 'wait', 'stand', 'default'],
+    sleep: ['sleep', 'idle', 'relax', 'wait'],
+    move: ['move', 'walk', 'run', 'idle'],
+    interact: ['interact', 'touch', 'tap', 'idle'],
+    special: ['special', 'skill', 'attack', 'interact', 'touch']
+  }[action] || [];
+
+  for (const candidate of candidates) {
+    const exact = animationNames.find((name) => name.toLowerCase() === candidate);
+    if (exact) return exact;
+    const partial = animationNames.find((name) => name.toLowerCase().includes(candidate));
+    if (partial) return partial;
+  }
+
+  return animationNames[0] || null;
+}
+
+function rebuildSpineMetrics() {
+  if (!spineReady || !spineApp) return;
+
+  assetMetrics = new Map();
+  const actions = ['sit', 'relax', 'sleep', 'move', 'interact', 'special'];
+  for (const action of actions) {
+    const animation = getSpineAnimationForAction(action);
+    if (!animation) continue;
+    const metrics = measureSpineMetrics(animation, action);
+    if (metrics) assetMetrics.set(`spine:${action}`, metrics);
+  }
+}
+
+function getSpineAnimationForAction(action) {
+  const value = spineAnimationMap[action];
+  return Array.isArray(value) ? randomFrom(value) : value;
+}
+
+function measureSpineMetrics(animationName, action = null) {
+  if (!spineApp || !animationName) return null;
+
+  const { skeleton, state, spineObject, skeletonData } = spineApp;
+  const animation = skeletonData.findAnimation(animationName);
+  const duration = Number(animation?.duration) || 0;
+  const sampleCount = duration > 0 ? spineBoundsSampleCount : 1;
+  let unionBounds = null;
+
+  try {
+    for (let index = 0; index < sampleCount; index += 1) {
+      const sampleTime = duration > 0 ? (duration * index) / sampleCount : 0;
+      if (typeof skeleton.setToSetupPose === 'function') skeleton.setToSetupPose();
+      state.setAnimation(0, animationName, true);
+      state.update(sampleTime);
+      state.apply(skeleton);
+      skeleton.updateWorldTransform();
+      spineObject.update(0);
+      unionBounds = unionSpineWorldBounds(unionBounds, getSpineSkeletonBounds(skeleton));
+    }
+  } catch (error) {
+    console.error(`Spine animation "${animationName}" failed to measure.`, error);
+    return null;
+  }
+
+  const bounds = unionBounds || getSpineSkeletonBounds(skeleton);
+  const worldWidth = Math.max(1, Math.ceil(bounds.width || 220));
+  const worldHeight = Math.max(1, Math.ceil(bounds.height || 300));
+  const fullWidth = spineCanvasWidth;
+  const fullHeight = spineCanvasHeight;
+  const antiClipPadding = spineActionAntiClipPadding[action] || {};
+  const renderWidth = fullWidth + Math.max(0, Number(antiClipPadding.left) || 0) + Math.max(0, Number(antiClipPadding.right) || 0);
+  const renderHeight = fullHeight + Math.max(0, Number(antiClipPadding.top) || 0) + Math.max(0, Number(antiClipPadding.bottom) || 0);
+  const actionOffset = spineActionVisualOffsets[action] || {};
+  const offsetY = Number(actionOffset.y) || 0;
+  const fitScale = Math.min(
+    1,
+    (spineCanvasWidth - spineCanvasPadding * 2) / worldWidth,
+    (fullHeight - spineCanvasPadding * 2 - Math.max(0, offsetY)) / worldHeight
+  );
+  const crop = {
+    left: 0,
+    top: 0,
+    right: fullWidth,
+    bottom: fullHeight
+  };
+  const visibleBox = getSpineVisibleBox(bounds, fitScale, fullWidth, fullHeight, action);
+
+  return {
+    file: `spine:${animationName}`,
+    animationName,
+    renderer: 'spine',
+    worldBounds: bounds,
+    worldScale: fitScale,
+    visibleBox,
+    videoWidth: fullWidth,
+    videoHeight: fullHeight,
+    renderWidth,
+    renderHeight,
+    displayScale: spineAssetFiles.displayScale,
+    crop,
+    cropWidth: fullWidth,
+    cropHeight: fullHeight,
+    anchor: {
+      x: visibleBox.left + (visibleBox.right - visibleBox.left) / 2,
+      y: visibleBox.top
+    }
+  };
+}
+
+function getSpineVisibleBox(bounds, worldScale, fullWidth, fullHeight, action = null) {
+  const scaledWidth = bounds.width * worldScale;
+  const scaledHeight = bounds.height * worldScale;
+  const offset = spineActionVisualOffsets[action] || {};
+  const offsetY = Number(offset.y) || 0;
+  const left = (fullWidth - scaledWidth) / 2;
+  const top = fullHeight - spineCanvasPadding - scaledHeight + offsetY;
+
+  return {
+    left: left + (Number(offset.x) || 0),
+    top,
+    right: left + (Number(offset.x) || 0) + scaledWidth,
+    bottom: top + scaledHeight
+  };
+}
+
+function unionSpineWorldBounds(current, next) {
+  const left = next.x;
+  const top = next.y;
+  const right = next.x + next.width;
+  const bottom = next.y + next.height;
+
+  if (!current) {
+    return {
+      x: left,
+      y: top,
+      width: Math.max(1, right - left),
+      height: Math.max(1, bottom - top)
+    };
+  }
+
+  const unionLeft = Math.min(current.x, left);
+  const unionTop = Math.min(current.y, top);
+  const unionRight = Math.max(current.x + current.width, right);
+  const unionBottom = Math.max(current.y + current.height, bottom);
+
+  return {
+    x: unionLeft,
+    y: unionTop,
+    width: Math.max(1, unionRight - unionLeft),
+    height: Math.max(1, unionBottom - unionTop)
+  };
+}
+
+function getSpineSkeletonBounds(skeleton) {
+  const offset = new window.PIXI.spine.Vector2();
+  const size = new window.PIXI.spine.Vector2();
+  skeleton.getBounds(offset, size, []);
+
+  const x = Number.isFinite(offset.x) ? offset.x : 0;
+  const y = Number.isFinite(offset.y) ? offset.y : 0;
+  const width = Number.isFinite(size.x) && size.x > 0 ? size.x : 220;
+  const height = Number.isFinite(size.y) && size.y > 0 ? size.y : 300;
+
+  return { x, y, width, height };
+}
+
+function positionSpineSkeleton(metrics) {
+  if (!spineApp || !metrics?.worldBounds) return;
+  const bounds = metrics.worldBounds;
+  const worldScale = Number(metrics.worldScale) > 0 ? Number(metrics.worldScale) : 1;
+  const visibleBox = metrics.visibleBox || getSpineVisibleBox(bounds, worldScale, metrics.videoWidth, metrics.videoHeight);
+
+  spineApp.spineObject.scale.set(worldScale);
+  spineApp.spineObject.x = visibleBox.left - bounds.x * worldScale;
+  spineApp.spineObject.y = visibleBox.top - bounds.y * worldScale;
+}
+
+async function setSpineAction(action, options = {}) {
+  if (!spineReady || !spineApp) return;
+
+  const animationName = getSpineAnimationForAction(action);
+  if (!animationName) return;
+
+  try {
+    spineApp.state.setAnimation(0, animationName, !temporaryActions.has(action));
+    spineApp.state.update(0);
+    spineApp.state.apply(spineApp.skeleton);
+    spineApp.skeleton.updateWorldTransform();
+  } catch {
+    return;
+  }
+
+  const assetKey = `spine:${action}`;
+  const metrics = measureSpineMetrics(animationName, action) || assetMetrics.get(assetKey);
+  if (!metrics) return;
+
+  currentAction = action;
+  currentAssetFile = assetKey;
+  currentMetrics = metrics;
+  document.documentElement.dataset.action = action;
+  applyAssetMetrics(metrics);
+  positionSpineSkeleton(metrics);
+
+  try {
+    spineApp.state.setAnimation(0, animationName, !temporaryActions.has(action));
+    spineApp.state.update(0);
+    spineApp.state.apply(spineApp.skeleton);
+    spineApp.skeleton.updateWorldTransform();
+  } catch {
+    return;
+  }
+
+  const animation = spineApp.skeletonData.findAnimation(animationName);
+  if (temporaryActions.has(action)) {
+    spineAnimationEndAt = performance.now() + Math.max(600, (animation?.duration || 3.2) * 1000);
+  } else {
+    spineAnimationEndAt = 0;
+  }
+
+  renderPixiSpine();
+  updateContentBounds();
+  refreshMouseHitTestFromCursor();
+}
+
+function disposeSpineApp() {
+  spineReady = false;
+  spineAnimationEndAt = 0;
+  if (spineApp?.pixiApp) {
+    try {
+      spineApp.pixiApp.destroy(false, { children: true, texture: false, baseTexture: false });
+    } catch {
+      // Ignore disposal errors while switching renderers.
+    }
+  }
+  spineCanvas.width = 1;
+  spineCanvas.height = 1;
+  spineApp = null;
+}
+
 async function setAction(action, options = {}) {
+  if (activeRenderer === 'spine') {
+    await setSpineAction(action, options);
+    return;
+  }
+
   const assetFile = getAssetFileForAction(action);
   if (!assetFile) return;
 
@@ -509,8 +1086,14 @@ function sayRandom() {
 }
 
 function holdManualAction(action) {
-  manualActionHoldUntil = performance.now() + manualActionHoldMs;
   manualHeldAction = action;
+
+  if (temporaryActions.has(action)) {
+    manualActionHoldUntil = 0;
+    return;
+  }
+
+  manualActionHoldUntil = performance.now() + manualActionHoldMs;
 }
 
 function getManualActionHoldRemaining() {
@@ -577,7 +1160,8 @@ async function startRoaming(options = {}) {
   }
 
   const distance = randomBetween(160, Math.min(520, Math.floor(usableWidth)));
-  const preferredDirection = Math.random() > 0.5 ? 1 : -1;
+  const edgeDirection = getHorizontalEdgeDirection(bounds.x, minX, maxX, 8);
+  const preferredDirection = options.direction || (edgeDirection ? -edgeDirection : Math.random() > 0.5 ? 1 : -1);
   let targetX = bounds.x + distance * preferredDirection;
 
   if (targetX <= minX + 8 || targetX >= maxX - 8) {
@@ -593,7 +1177,7 @@ async function startRoaming(options = {}) {
   }
 
   const direction = targetX > bounds.x ? 1 : -1;
-  const speed = randomBetween(70, 120) / 1000;
+  const speed = (randomBetween(35, 60) * petSizeScale) / 1000;
 
   roamState = {
     startX: bounds.x,
@@ -633,11 +1217,12 @@ async function animateRoaming(time = performance.now()) {
     const { bounds, workArea, contentBounds } = nextState;
     const minX = workArea.x - contentBounds.left;
     const maxX = workArea.x + workArea.width - contentBounds.right;
-    const hitEdge = bounds.x <= minX + 1 || bounds.x >= maxX - 1;
+    const edgeDirection = getHorizontalEdgeDirection(bounds.x, minX, maxX, 1);
+    const hitEdge = edgeDirection !== 0;
 
     if (Math.abs(bounds.x - roamState.targetX) <= 2 || hitEdge) {
       stopRoaming();
-      settleAfterRoam(hitEdge);
+      settleAfterRoam(edgeDirection);
       return;
     }
   }
@@ -652,16 +1237,25 @@ function stopRoaming() {
   isRoaming = false;
 }
 
-function settleAfterRoam(hitEdge = false) {
+function settleAfterRoam(edgeDirection = 0) {
   isRoaming = false;
+  const hitEdge = edgeDirection !== 0;
+  if (hitEdge) setDirection(-edgeDirection);
+
   if (manualHeldAction === 'move' && isManualActionHoldActive()) {
     if (hitEdge && Math.random() > 0.35) {
       say('到边界了。看来桌面也有尽头。', 3200);
     }
-    window.clearTimeout(roamTimer);
-    roamTimer = window.setTimeout(() => {
-      startRoaming({ force: true });
-    }, randomBetween(300, 900));
+
+    if (hitEdge) {
+      startRoaming({ force: true, direction: -edgeDirection });
+    } else {
+      window.clearTimeout(roamTimer);
+      roamTimer = window.setTimeout(() => {
+        startRoaming({ force: true });
+      }, randomBetween(300, 900));
+    }
+
     return;
   }
 
@@ -676,6 +1270,12 @@ function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
 
+function getHorizontalEdgeDirection(x, minX, maxX, tolerance = 1) {
+  if (x <= minX + tolerance) return -1;
+  if (x >= maxX - tolerance) return 1;
+  return 0;
+}
+
 function randomFrom(list) {
   if (!Array.isArray(list) || list.length === 0) return null;
   return list[Math.floor(Math.random() * list.length)];
@@ -683,6 +1283,27 @@ function randomFrom(list) {
 
 function randomBetween(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+function normalizePetSizeScale(value) {
+  const scale = Number(value);
+  if (!Number.isFinite(scale) || scale <= 0) return 1;
+  return clamp(scale, minPetSizeScale, maxPetSizeScale);
+}
+
+function setPetSizePercent(percent) {
+  petSizeScale = normalizePetSizeScale((Number(percent) || 100) / 100);
+
+  if (currentMetrics) {
+    applyAssetMetrics(currentMetrics);
+    updateContentBounds();
+    refreshMouseHitTestFromCursor();
+  }
+}
+
+function getErrorMessage(error) {
+  if (error instanceof Error && error.message) return error.message;
+  return String(error || '未知错误');
 }
 
 function formatBubbleText(text) {
@@ -1027,6 +1648,21 @@ function applyAssetMetrics(metrics) {
   document.documentElement.style.setProperty('--pet-crop-height', `${cropHeight}px`);
   document.documentElement.style.setProperty('--pet-offset-x', `${offsetX}px`);
   document.documentElement.style.setProperty('--pet-offset-y', `${offsetY}px`);
+
+  if (metrics.renderer === 'spine') {
+    applySpineCanvasDisplaySize(metrics, scale);
+  }
+}
+
+function applySpineCanvasDisplaySize(metrics, scale = getFullVideoDisplayScale(metrics)) {
+  if (!spineCanvas || !metrics) return;
+
+  const renderWidth = Math.max(1, Math.round((metrics.renderWidth || metrics.videoWidth) * scale));
+  const renderHeight = Math.max(1, Math.round((metrics.renderHeight || metrics.videoHeight) * scale));
+  document.documentElement.style.setProperty('--spine-render-width', `${renderWidth}px`);
+  document.documentElement.style.setProperty('--spine-render-height', `${renderHeight}px`);
+  spineCanvas.style.width = `${renderWidth}px`;
+  spineCanvas.style.height = `${renderHeight}px`;
 }
 
 function yieldToBrowser() {
@@ -1039,12 +1675,14 @@ function getFullVideoDisplayScale(metrics) {
   const maxHeight = Math.max(1, Math.min(window.innerHeight * 0.88, 344, dragRect.height - 4));
   const videoRatio = metrics.videoWidth / metrics.videoHeight;
   const targetRatio = maxWidth / maxHeight;
+  const rendererScale = Number(metrics.displayScale) > 0 ? Number(metrics.displayScale) : 1;
+  const sizeScale = normalizePetSizeScale(petSizeScale);
 
   if (targetRatio > videoRatio) {
-    return maxHeight / metrics.videoHeight;
+    return (maxHeight / metrics.videoHeight) * rendererScale * sizeScale;
   }
 
-  return maxWidth / metrics.videoWidth;
+  return (maxWidth / metrics.videoWidth) * rendererScale * sizeScale;
 }
 
 function updateContentBounds() {
@@ -1076,14 +1714,14 @@ function getRenderedPetRect() {
 }
 
 function getRenderedContentBounds(renderedPet) {
-  let bounds = {
+  let bounds = activeRenderer === 'spine' ? getRenderedSpineVisibleBounds(renderedPet) : {
     left: renderedPet.x,
     top: renderedPet.y,
     right: renderedPet.x + renderedPet.width,
     bottom: renderedPet.y + renderedPet.height
   };
 
-  if (currentAction === 'sit' && stool && activeDecorationProfiles.sit?.enabled !== false) {
+  if (activeRenderer !== 'spine' && currentAction === 'sit' && stool && activeDecorationProfiles.sit?.enabled !== false) {
     const stoolRect = stool.getBoundingClientRect();
     if (stoolRect.width > 0 && stoolRect.height > 0) {
       bounds = unionBoundsWith(bounds, {
@@ -1095,7 +1733,7 @@ function getRenderedContentBounds(renderedPet) {
     }
   }
 
-  if (currentAction === 'sleep' && bed && activeDecorationProfiles.sleep?.enabled !== false) {
+  if (activeRenderer !== 'spine' && currentAction === 'sleep' && bed && activeDecorationProfiles.sleep?.enabled !== false) {
     const bedRect = bed.getBoundingClientRect();
     if (bedRect.width > 0 && bedRect.height > 0) {
       bounds = unionBoundsWith(bounds, {
@@ -1108,6 +1746,27 @@ function getRenderedContentBounds(renderedPet) {
   }
 
   return bounds;
+}
+
+function getRenderedSpineVisibleBounds(renderedPet) {
+  const box = currentMetrics?.visibleBox;
+  if (!box) {
+    return {
+      left: renderedPet.x,
+      top: renderedPet.y,
+      right: renderedPet.x + renderedPet.width,
+      bottom: renderedPet.y + renderedPet.height
+    };
+  }
+
+  const scaleX = renderedPet.width / currentMetrics.videoWidth;
+  const scaleY = renderedPet.height / currentMetrics.videoHeight;
+  return {
+    left: renderedPet.x + box.left * scaleX,
+    top: renderedPet.y + box.top * scaleY,
+    right: renderedPet.x + box.right * scaleX,
+    bottom: renderedPet.y + box.bottom * scaleY
+  };
 }
 
 function mapCropPointToWindow(renderedPet, point) {
@@ -1143,6 +1802,10 @@ function updateBubbleAnchor(bounds, anchor = null) {
     x = clamp(x, minX, Math.max(minX, maxX));
   }
 
+  const minLocalX = padding + halfBubbleWidth;
+  const maxLocalX = window.innerWidth - padding - halfBubbleWidth;
+  x = clamp(x, minLocalX, Math.max(minLocalX, maxLocalX));
+
   const anchorY = anchor?.y ?? bounds.top;
   const minY = bubbleRect.height + padding;
   const maxY = Math.max(minY, window.innerHeight - padding);
@@ -1176,15 +1839,20 @@ function startMouseHitPolling() {
   }, mousePollMs);
 }
 
-function stopMouseHitPolling() {
-  window.clearInterval(mousePollTimer);
-  mousePollTimer = null;
-}
-
 function isVisiblePixelAtPoint(point) {
   if (!currentMetrics) return false;
 
   const renderedPet = getRenderedPetRect();
+  const visibleBounds = activeRenderer === 'spine' ? getRenderedContentBounds(renderedPet) : null;
+
+  if (visibleBounds) {
+    return (
+      point.x >= visibleBounds.left &&
+      point.x < visibleBounds.right &&
+      point.y >= visibleBounds.top &&
+      point.y < visibleBounds.bottom
+    );
+  }
 
   if (
     point.x < renderedPet.x ||
@@ -1361,6 +2029,13 @@ window.desktopPet.onSayRandom(() => {
   sayRandom();
 });
 
+window.desktopPet.onPetSizeChanged((percent) => {
+  stopRoaming();
+  setPetSizePercent(percent);
+  scheduleRoaming(randomBetween(3600, 9000));
+  say(`桌宠大小：${Math.round(Number(percent) || 100)}%`, 2200);
+});
+
 window.desktopPet.onAssetsChanged((assets) => {
   stopRoaming();
   window.clearTimeout(roamTimer);
@@ -1369,7 +2044,7 @@ window.desktopPet.onAssetsChanged((assets) => {
     if (applied) {
       say('动作文件夹已切换。', 3000);
     } else {
-      say('这个文件夹里没有可用动作。', 3200);
+      say(lastAssetBundleError || '这个文件夹里没有可用动作。', 4200);
     }
 
     scheduleRoaming(randomBetween(5000, 11000));
@@ -1377,7 +2052,7 @@ window.desktopPet.onAssetsChanged((assets) => {
 });
 
 video.addEventListener('ended', () => {
-  if (!isManualActionHoldActive() && temporaryActions.has(currentAction)) {
+  if (temporaryActions.has(currentAction)) {
     setAction(randomFrom(getIdleActions()));
   }
 });
@@ -1388,6 +2063,12 @@ window.addEventListener('resize', () => {
 });
 
 async function boot() {
+  try {
+    setPetSizePercent(await window.desktopPet.getPetSize());
+  } catch {
+    setPetSizePercent(100);
+  }
+
   const assets = await window.desktopPet.getAssets();
   setDirection(1);
   setMouseEventsIgnored(true);

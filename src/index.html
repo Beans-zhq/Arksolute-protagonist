@@ -27,10 +27,13 @@
           />
           <div id="petViewport" class="pet-viewport">
             <video id="petVideo" class="pet-video" autoplay muted loop playsinline></video>
+            <canvas id="spineCanvas" class="spine-canvas" aria-hidden="true"></canvas>
           </div>
         </div>
       </div>
     </main>
+    <script src="./vendor/pixi.min.js"></script>
+    <script src="./vendor/pixi-spine-3.8.js"></script>
     <script src="./tauri-adapter.js"></script>
     <script src="./renderer.js"></script>
   </body>

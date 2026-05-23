@@ -12,6 +12,7 @@ dist/
 src-tauri/target/
 
 # Local test captures
+tauri-dev*.log
 background-now.png
 pet-current-*.png
 pet-screen-*.png

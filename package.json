@@ -7,7 +7,8 @@
     "start": "tauri dev",
     "dev": "tauri dev",
     "package:win": "npm run package:installer",
-    "package:installer": "node ./scripts/package-installer.js"
+    "package:installer": "node ./scripts/package-installer.js",
+    "package:installer:dry-run": "node ./scripts/package-installer.js --dry-run"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0"

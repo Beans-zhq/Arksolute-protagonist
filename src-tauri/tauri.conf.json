@@ -11,7 +11,7 @@
   "app": {
     "withGlobalTauri": true,
     "security": {
-      "csp": "default-src 'self' ipc: http://ipc.localhost; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: http://asset.localhost; media-src 'self' blob: asset: http://asset.localhost; connect-src ipc: http://ipc.localhost",
+      "csp": "default-src 'self' ipc: http://ipc.localhost; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: asset: http://asset.localhost; media-src 'self' blob: asset: http://asset.localhost; connect-src ipc: http://ipc.localhost blob: asset: http://asset.localhost",
       "assetProtocol": {
         "enable": true,
         "scope": [
@@ -27,9 +27,9 @@
       {
         "label": "main",
         "title": "Absolute protagonist",
-        "width": 320,
+        "width": 520,
         "height": 392,
-        "minWidth": 220,
+        "minWidth": 420,
         "minHeight": 260,
         "resizable": false,
         "decorations": false,
@@ -47,7 +47,8 @@
     "targets": ["nsis"],
     "icon": ["../icon/icon.ico", "../icon/icon.png"],
     "resources": {
-      "../assets": "assets",
+      "../webm-assets": "webm-assets",
+      "../spine-assets": "spine-assets",
       "../icon": "icon"
     },
     "windows": {

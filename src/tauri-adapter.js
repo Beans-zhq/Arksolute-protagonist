@@ -47,15 +47,6 @@
     };
   }
 
-  async function monitorFromWindowBounds(position, size) {
-    const center = {
-      x: position.x + size.width / 2,
-      y: position.y + size.height / 2
-    };
-
-    return (await monitorFromPoint(center.x, center.y)) || (await primaryMonitor());
-  }
-
   async function monitorFromCursor() {
     const cursor = await cursorPosition();
     const monitor = (await monitorFromPoint(cursor.x, cursor.y)) || (await primaryMonitor());
@@ -118,11 +109,7 @@
   }
 
   async function setWindowPosition(position) {
-    const [currentPosition, size, scaleFactor] = await Promise.all([
-      currentWindow.outerPosition(),
-      currentWindow.outerSize(),
-      currentWindow.scaleFactor()
-    ]);
+    const [size, scaleFactor] = await Promise.all([currentWindow.outerSize(), currentWindow.scaleFactor()]);
     const cssSize = physicalSizeToCss(size, scaleFactor);
     const effectiveBounds = getEffectiveContentBounds(cssSize);
     const monitor = await monitorFromContentBounds(
@@ -319,8 +306,7 @@
 
   window.desktopPet = {
     showMenu: () => invoke('show_menu'),
-    chooseAssetFolder: () => invoke('choose_asset_folder'),
-    resetAssetFolder: () => invoke('reset_asset_folder'),
+    getPetSize: () => invoke('get_pet_size'),
     setMouseEventsIgnored: (ignored) => currentWindow.setIgnoreCursorEvents(ignored),
     getAssets: () => invoke('get_assets'),
     readAssetFile: (fileName) => invoke('read_asset_file', { fileName }),
@@ -333,6 +319,7 @@
     getCursorClientPoint,
     convertAssetFileSrc,
     onSetAction: (callback) => onEvent('pet:set-action', callback),
+    onPetSizeChanged: (callback) => onEvent('pet:size-changed', callback),
     onSayRandom: (callback) => onEvent('pet:say-random', callback),
     onAssetsChanged: (callback) => onEvent('pet:assets-changed', callback)
   };
